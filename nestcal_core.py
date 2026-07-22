@@ -341,6 +341,14 @@ def is_due_or_running(occ: Occurrence, now: datetime, lead: timedelta) -> bool:
     return occ.start_local - lead <= now < occ.end_local
 
 
+def is_running(occ: Occurrence, now: datetime) -> bool:
+    """True while the meeting is in progress: started and not yet ended.
+    All-day events are excluded (they're not pop-up reminders)."""
+    if occ.all_day:
+        return False
+    return occ.start_local <= now < occ.end_local
+
+
 def prune_seen(seen: set, retention_seconds: float) -> set:
     """
     Bound the notified-keys set: drop keys for events whose start is further in

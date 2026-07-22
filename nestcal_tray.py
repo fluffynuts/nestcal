@@ -39,7 +39,8 @@ except ImportError:
 
 from nestcal_core import (
     Logger, load_config, get_feeds, get_setting, collect_upcoming,
-    is_due_or_running, prune_seen, format_time_range, format_countdown, Occurrence,
+    is_due_or_running, prune_seen, format_time_range,
+    format_countdown, Occurrence,
 )
 
 # Keep notified-keys for events whose start is within the last day; older ones
@@ -257,15 +258,12 @@ class TrayApp:
         self.icon = make_icon()  # one calendar icon, shared by tray and windows
         self.tray = QSystemTrayIcon(self.icon, app)
         self.tray.setToolTip("nestcal")
-        menu = QMenu()
-        poll_action = QAction("Poll now", menu)
-        poll_action.triggered.connect(lambda: self.poller.poll_now())
-        quit_action = QAction("Quit", menu)
-        quit_action.triggered.connect(self.quit)
-        menu.addAction(poll_action)
-        menu.addSeparator()
-        menu.addAction(quit_action)
-        self.tray.setContextMenu(menu)
+        # Menu is rebuilt each time it's opened so the list of in-progress
+        # meetings at the top is always current.
+        self.menu = QMenu()
+        self.menu.aboutToShow.connect(self._rebuild_menu)
+        self._rebuild_menu()
+        self.tray.setContextMenu(self.menu)
         self.tray.show()
 
         self.poller = CalendarPoller(self.feeds, self.window_hours, poll_interval, logger)
@@ -275,6 +273,30 @@ class TrayApp:
         self.timer = QTimer()
         self.timer.timeout.connect(self.check_due)
         self.timer.start(max(1, check_interval) * 1000)
+
+    def _rebuild_menu(self) -> None:
+        """Repopulate the tray menu: meetings in progress OR within their lead
+        window at the top (each opens its reminder when clicked, even if
+        previously dismissed), then the standard actions. Rebuilt on aboutToShow
+        so it's always current — this is the recovery path for a pop-up you
+        dismissed early or missed."""
+        self.menu.clear()
+        local_tz = datetime.now().astimezone().tzinfo
+        now = datetime.now(tz=local_tz)
+
+        current = [o for o in self.events if is_due_or_running(o, now, self.lead)]
+        for occ in current:
+            action = self.menu.addAction(f"{occ.summary} {format_time_range(occ)}")
+            # default-arg binds this occ (avoids the late-binding loop trap)
+            action.triggered.connect(lambda checked=False, o=occ: self.open_event(o))
+        if current:
+            self.menu.addSeparator()
+
+        poll_action = self.menu.addAction("Poll now")
+        poll_action.triggered.connect(lambda: self.poller.poll_now())
+        self.menu.addSeparator()
+        quit_action = self.menu.addAction("Quit")
+        quit_action.triggered.connect(self.quit)
 
     def on_events(self, occurrences: list) -> None:
         self.events = occurrences
@@ -308,6 +330,19 @@ class TrayApp:
         if occ.key in self.windows:
             return
         self.logger.log(f"firing reminder for '{occ.summary}'")
+        self._show_window(occ)
+
+    def open_event(self, occ: Occurrence) -> None:
+        """Open (or raise) the reminder for an event on demand — e.g. from the
+        tray menu — regardless of whether it's already been notified/dismissed."""
+        existing = self.windows.get(occ.key)
+        if existing is not None:
+            existing.present()
+            return
+        self.logger.log(f"opening reminder for '{occ.summary}' from menu")
+        self._show_window(occ)
+
+    def _show_window(self, occ: Occurrence) -> None:
         window = ReminderWindow(occ, self.snooze_minutes, self.icon, self.logger)
         window.dismissed.connect(lambda key: self.windows.pop(key, None))
         self.windows[occ.key] = window
