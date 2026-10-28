@@ -85,6 +85,11 @@ elsewhere it's `dist/nestcal/Nestcal`.
 macOS
 ---
 
+There are two builds per architecture. The default one needs **macOS 13 or later** (it uses Qt 6).
+On macOS 11 or 12, download the `-qt5` build instead (`nestcal-macos-amd64-qt5.zip` for Intel,
+`nestcal-macos-arm64-qt5.zip` for Apple Silicon); it uses Qt 5.15, which still runs there.
+Without it, a too-new macOS requirement makes the app quit at once with no window and no config file.
+
 The app lives in the menu bar only: no Dock icon, no window until a meeting is due.
 
 Before the first launch:
