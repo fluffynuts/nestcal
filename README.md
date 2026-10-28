@@ -54,6 +54,13 @@ Requirements
   - recurring_ical_events
 
 
+Update check
+---
+
+Release builds check GitHub once at startup and, if a newer release exists, show a dialog
+with buttons to open the releases page or dismiss it. Source and `./build.sh` builds are
+unstamped ("dev") and never check. A failed check is silent; run with `--debug` to see why.
+
 Tests
 ---
 

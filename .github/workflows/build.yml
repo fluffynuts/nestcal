@@ -63,6 +63,11 @@ jobs:
 
       - run: python -m pip install -r requirements-build.txt
 
+      # Same number as the tag the release job publishes, so the app knows its own version.
+      - name: Stamp the version into the build
+        shell: bash
+        run: echo "VERSION = \"$(tr -d '[:space:]' < VERSION).${{ github.run_number }}\"" > nestcal_version.py
+
       - run: pyinstaller --noconfirm nestcal.spec
 
       - name: Check the executable matches the runner architecture

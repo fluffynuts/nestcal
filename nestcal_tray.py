@@ -23,17 +23,17 @@ from datetime import datetime, timedelta
 try:
     from PyQt6.QtWidgets import (
         QApplication, QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
-        QSystemTrayIcon, QMenu,
+        QSystemTrayIcon, QMenu, QMessageBox,
     )
-    from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QUrl
+    from PyQt6.QtCore import Qt, QThread, QObject, pyqtSignal, QTimer, QUrl
     from PyQt6.QtGui import QIcon, QAction, QDesktopServices, QPixmap, QPainter, QColor, QFont
     PYQT = 6
 except ImportError:
     from PyQt5.QtWidgets import (
         QApplication, QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
-        QSystemTrayIcon, QMenu, QAction,
+        QSystemTrayIcon, QMenu, QAction, QMessageBox,
     )
-    from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QUrl
+    from PyQt5.QtCore import Qt, QThread, QObject, pyqtSignal, QTimer, QUrl
     from PyQt5.QtGui import QIcon, QDesktopServices, QPixmap, QPainter, QColor, QFont
     PYQT = 5
 
@@ -42,6 +42,8 @@ from nestcal_core import (
     is_due_or_running, prune_seen, format_time_range,
     format_countdown, Occurrence,
 )
+from nestcal_update import RELEASES_URL, fetch_latest_version, is_newer, parse_version
+from nestcal_version import VERSION
 
 # Keep notified-keys for events whose start is within the last day; older ones
 # can't reappear in the window or still be running, so they're safe to forget.
@@ -55,12 +57,16 @@ if PYQT == 6:
     TEXT_BROWSER = Qt.TextInteractionFlag.TextBrowserInteraction
     TRAY_TRIGGER = QSystemTrayIcon.ActivationReason.Trigger
     WA_DELETE_ON_CLOSE = Qt.WidgetAttribute.WA_DeleteOnClose
+    ACCEPT_ROLE = QMessageBox.ButtonRole.AcceptRole
+    REJECT_ROLE = QMessageBox.ButtonRole.RejectRole
 else:
     STAY_ON_TOP = Qt.WindowStaysOnTopHint
     ALIGN_CENTER = Qt.AlignCenter
     TEXT_BROWSER = Qt.TextBrowserInteraction
     TRAY_TRIGGER = QSystemTrayIcon.Trigger
     WA_DELETE_ON_CLOSE = Qt.WA_DeleteOnClose
+    ACCEPT_ROLE = QMessageBox.AcceptRole
+    REJECT_ROLE = QMessageBox.RejectRole
 
 
 # --- Tray icon ---
@@ -120,6 +126,32 @@ class CalendarPoller(QThread):
     def stop(self) -> None:
         self._stopping = True
         self._wake.set()
+
+
+# --- Update check ---
+
+class UpdateChecker(QObject):
+    """Asks GitHub once, off the UI thread, whether a newer release exists, and
+    emits update_available(tag) if so. A daemon thread (rather than a QThread)
+    so quitting mid-request can't trip over a still-running Qt thread."""
+
+    update_available = pyqtSignal(str)
+
+    def __init__(self, logger: Logger):
+        super().__init__()
+        self.logger = logger
+
+    def start(self) -> None:
+        threading.Thread(target=self._check, daemon=True).start()
+
+    def _check(self) -> None:
+        if parse_version(VERSION) is None:
+            self.logger.log(f"update check skipped: running an unstamped '{VERSION}' build")
+            return
+        latest = fetch_latest_version(self.logger)
+        if latest is not None and is_newer(latest, VERSION):
+            self.logger.log(f"newer release available: {latest} (running {VERSION})")
+            self.update_available.emit(latest)
 
 
 # --- The bespoke reminder window ---
@@ -270,6 +302,11 @@ class TrayApp:
         self.poller.events_updated.connect(self.on_events)
         self.poller.start()
 
+        self.update_dialog = None
+        self.update_checker = UpdateChecker(logger)
+        self.update_checker.update_available.connect(self.show_update_dialog)
+        self.update_checker.start()
+
         self.timer = QTimer()
         self.timer.timeout.connect(self.check_due)
         self.timer.start(max(1, check_interval) * 1000)
@@ -347,6 +384,24 @@ class TrayApp:
         window.dismissed.connect(lambda key: self.windows.pop(key, None))
         self.windows[occ.key] = window
         window.present()
+
+    def show_update_dialog(self, latest: str) -> None:
+        dialog = QMessageBox()
+        dialog.setWindowTitle("nestcal update available")
+        dialog.setWindowIcon(self.icon)
+        dialog.setText(f"A newer version of nestcal is available: {latest}\n"
+                       f"You are running {VERSION}.")
+        open_releases = dialog.addButton("Open releases page", ACCEPT_ROLE)
+        dialog.addButton("Dismiss", REJECT_ROLE)
+        dialog.setAttribute(WA_DELETE_ON_CLOSE, True)
+
+        def on_clicked(button) -> None:
+            if button is open_releases:
+                QDesktopServices.openUrl(QUrl(RELEASES_URL))
+
+        dialog.buttonClicked.connect(on_clicked)
+        self.update_dialog = dialog  # hold a reference or it's garbage-collected
+        dialog.show()
 
     def quit(self) -> None:
         self.logger.log("shutting down")
