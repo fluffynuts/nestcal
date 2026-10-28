@@ -57,9 +57,10 @@ Requirements
 Standalone apps (work in progress)
 ---
 
-CI builds standalone apps for macOS (Apple Silicon and Intel), Linux and Windows;
-see the `build` workflow's artifacts. To build locally instead, run `./build.sh`
-on the machine you want to run it on. On macOS the app lands in `dist/Nestcal.app`;
+Every push to master publishes a release with standalone apps for macOS (Apple Silicon
+and Intel), Linux and Windows; download them from the Releases page. The `build` workflow
+also keeps them as artifacts. To build locally instead, run `./build.sh` on the machine
+you want to run it on. On macOS the app lands in `dist/Nestcal.app`;
 elsewhere it's `dist/nestcal/Nestcal`.
 
 macOS

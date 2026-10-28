@@ -6,6 +6,9 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build:
     strategy:
@@ -13,14 +16,14 @@ jobs:
       matrix:
         include:
           - runner: macos-14
-            artifact: Nestcal-macos-arm64
+            artifact: nestcal-macos-arm64
           - runner: macos-15-intel
-            artifact: Nestcal-macos-x86_64
+            artifact: nestcal-macos-amd64
           # oldest available Ubuntu: a binary only runs on the glibc it was built against or newer
           - runner: ubuntu-22.04
-            artifact: Nestcal-linux-x86_64
+            artifact: nestcal-linux-amd64
           - runner: windows-latest
-            artifact: Nestcal-windows-x86_64
+            artifact: nestcal-windows-amd64
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -97,3 +100,75 @@ jobs:
             ${{ matrix.artifact }}.zip
             ${{ matrix.artifact }}.tar.gz
           if-no-files-found: error
+
+  # Every push to master publishes a release, versioned VERSION (major.minor) plus
+  # the run number, with fixed asset names so releases/latest/download/<name> links stay valid.
+  release:
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: read
+    concurrency:
+      group: release
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Gather and verify packages
+        run: |
+          mkdir release
+          find artifacts -type f \( -name '*.zip' -o -name '*.tar.gz' \) -exec cp {} release/ \;
+          [ "$(ls release | wc -l)" -eq 4 ]
+          for package in release/*.zip; do unzip -tq "$package"; done
+          for package in release/*.tar.gz; do tar -tzf "$package" > /dev/null; done
+          (cd release && sha256sum -- * > SHA256SUMS)
+          cat release/SHA256SUMS
+
+      - name: Publish release
+        run: |
+          version="$(tr -d '[:space:]' < VERSION).${GITHUB_RUN_NUMBER}"
+          tag="v${version}"
+
+          if pr="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" \
+              --jq '.[0] | select(. != null) | "### \(.title) (#\(.number))\n\n\(.body // "")"')"; then
+            echo "$pr" > notes.md
+          else
+            echo "::warning::could not look up the pull request for ${GITHUB_SHA}; releasing without its description"
+            : > notes.md
+          fi
+
+          cat >> notes.md <<EOF
+
+          **Work in progress.** Please report what you find.
+
+          ### Downloads
+
+          | Platform | File |
+          | --- | --- |
+          | macOS (Apple Silicon) | \`nestcal-macos-arm64.zip\` |
+          | macOS (Intel) | \`nestcal-macos-amd64.zip\` |
+          | Linux (x86-64) | \`nestcal-linux-amd64.tar.gz\` |
+          | Windows (x86-64) | \`nestcal-windows-amd64.zip\` |
+
+          \`SHA256SUMS\` has the checksum of each file.
+
+          Create \`~/.config/nestcal.ini\` before the first launch; see the README.
+
+          The apps are unsigned. On macOS, run \`xattr -cr Nestcal.app\` once (or right-click and choose Open);
+          on Windows, SmartScreen will warn on first run.
+          EOF
+
+          if gh release view "$tag" > /dev/null 2>&1; then
+            gh release upload "$tag" release/* --clobber
+          else
+            gh release create "$tag" release/* --target "$GITHUB_SHA" \
+              --title "nestcal ${version}" --notes-file notes.md --generate-notes --latest
+          fi
