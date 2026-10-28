@@ -1,174 +1,111 @@
-name: build
+Nestcal
+---
 
-on:
-  push:
-    branches: [master]
-  pull_request:
-  workflow_dispatch:
+A small systray app to monitor an .ics link for a calendar and notify you based on your
+own personal preferences before events start.
 
-permissions:
-  contents: read
+The use-case is that I kept missing meetings because Thunderbird would only notify if I'd
+added a notification or if the meeting was originally set up with a notification.
 
-jobs:
-  build:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: macos-14
-            artifact: nestcal-macos-arm64
-          - runner: macos-15-intel
-            artifact: nestcal-macos-amd64
-          # oldest available Ubuntu: a binary only runs on the glibc it was built against or newer
-          - runner: ubuntu-22.04
-            artifact: nestcal-linux-amd64
-          - runner: windows-latest
-            artifact: nestcal-windows-amd64
-    runs-on: ${{ matrix.runner }}
-    steps:
-      - uses: actions/checkout@v4
+You can get an .ics link to your google calendar by following instructions here:
+https://support.google.com/calendar/answer/37648?hl=en#zippy=%2Cget-your-calendar-view-only
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
+Usage
+---
 
-      # Installed before the build so PyInstaller bundles them, rather than
-      # leaving the app depending on whatever the user's machine has.
-      - name: Install Qt runtime libraries
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libegl1 libgl1 libglib2.0-0 libdbus-1-3 libfontconfig1 \
-            libfreetype6 libx11-6 libxkbcommon0 libxkbcommon-x11-0 libxcb-cursor0 \
-            libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-render-util0 \
-            libxcb-shape0 libxcb-xkb1
+Run once to create a config file at ~/.config/nestcal.ini. The app won't stay open, but now
+you can go and configure it:
 
-      - run: python -m pip install -r requirements-build.txt
+```
+# nestcal config
+# One entry per calendar under [calendars] as: label~~~~ = ICS_URL
+# Use the Google Calendar "Secret address in iCal format".
+# These URLs are secrets.
 
-      - run: pyinstaller --noconfirm nestcal.spec
+[settings]
+# how often to poll the .ics link, in seconds
+poll_interval = 300
+# pop up a notification this many minutes before a meeting is due to start
+lead_minutes = 2
+# only consider the next 24 hours for current processing
+window_hours = 24
+# how long snooze should snooze for
+snooze_minutes = 1
+# how often, in minutes, to check for anything tha may have slipped
+#  through the cracks, eg a meeting for now that was only discovered
+#  during startup, or a meeting you weren't in, which has already been 
+#  started, and you've just been added
+check_interval = 5
 
-      - name: Check the executable matches the runner architecture
-        if: runner.os == 'macOS'
-        run: |
-          expected="$([ "$(uname -m)" = arm64 ] && echo arm64 || echo x86_64)"
-          actual="$(lipo -archs dist/Nestcal.app/Contents/MacOS/Nestcal)"
-          echo "built for: $actual"
-          [ "$actual" = "$expected" ]
+[calendars]
+work = https://calendar.google.com/calendar/ical/...
+home = https://calendar.google.com/calendar/ical/...
+```
 
-      # With no feeds configured the app exits 1 with a known message, which
-      # proves every bundled import loads without needing a display or a calendar.
-      - name: Smoke test the bundled app
-        if: runner.os != 'Windows'
-        run: |
-          if [ "$RUNNER_OS" = macOS ]; then exe=dist/Nestcal.app/Contents/MacOS/Nestcal; else exe=dist/nestcal/Nestcal; fi
-          output="$(HOME="$(mktemp -d)" QT_QPA_PLATFORM=offscreen "$exe" 2>&1 || true)"
-          echo "$output"
-          echo "$output" | grep -q "no feeds configured"
+Mouse-over the systray icon to see the next upcoming event.
 
-      # The windowed exe has no stdout, so the message can't be read. Exit code 1
-      # plus the config stub having been written is the weaker equivalent.
-      - name: Smoke test the bundled app (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $fakeHome = New-Item -ItemType Directory -Path (Join-Path $env:RUNNER_TEMP "nestcal-home")
-          $env:USERPROFILE = $fakeHome.FullName
-          $env:QT_QPA_PLATFORM = "offscreen"
-          $process = Start-Process -FilePath dist\nestcal\Nestcal.exe -Wait -PassThru
-          Write-Host "exit code: $($process.ExitCode)"
-          if ($process.ExitCode -ne 1) { exit 1 }
-          if (-not (Test-Path (Join-Path $fakeHome.FullName ".config\nestcal.ini"))) { exit 1 }
+Requirements
+---
 
-      # ditto/tar keep the permissions and symlinks that upload-artifact's zip drops.
-      - name: Package (macOS)
-        if: runner.os == 'macOS'
-        run: ditto -c -k --keepParent dist/Nestcal.app "${{ matrix.artifact }}.zip"
+- Python 3 and pyqt6 or pyqt5 (failover)
+- Python libs:
+  - requests
+  - icalendar
+  - recurring_ical_events
 
-      - name: Package (Linux)
-        if: runner.os == 'Linux'
-        run: tar -czf "${{ matrix.artifact }}.tar.gz" -C dist nestcal
 
-      - name: Package (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: Compress-Archive -Path dist\nestcal -DestinationPath "${{ matrix.artifact }}.zip"
+Tests
+---
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact }}
-          path: |
-            ${{ matrix.artifact }}.zip
-            ${{ matrix.artifact }}.tar.gz
-          if-no-files-found: error
+```
+pip install -r requirements-test.txt
+python -m pytest
+```
 
-  # Every push to master publishes a release, versioned VERSION (major.minor) plus
-  # the run number, with fixed asset names so releases/latest/download/<name> links stay valid.
-  release:
-    needs: build
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      pull-requests: read
-    concurrency:
-      group: release
-      cancel-in-progress: false
-    env:
-      GH_TOKEN: ${{ github.token }}
-    steps:
-      - uses: actions/checkout@v4
+CI runs them on Linux, macOS and Windows, and a release is only built and published
+if they pass.
 
-      - uses: actions/download-artifact@v4
-        with:
-          path: artifacts
+Standalone apps (work in progress)
+---
 
-      - name: Gather and verify packages
-        run: |
-          mkdir release
-          find artifacts -type f \( -name '*.zip' -o -name '*.tar.gz' \) -exec cp {} release/ \;
-          [ "$(ls release | wc -l)" -eq 4 ]
-          for package in release/*.zip; do unzip -tq "$package"; done
-          for package in release/*.tar.gz; do tar -tzf "$package" > /dev/null; done
-          (cd release && sha256sum -- * > SHA256SUMS)
-          cat release/SHA256SUMS
+Every push to master publishes a release with standalone apps for macOS (Apple Silicon
+and Intel), Linux and Windows; download them from the Releases page. The `build` workflow
+also keeps them as artifacts. To build locally instead, run `./build.sh` on the machine
+you want to run it on. On macOS the app lands in `dist/Nestcal.app`;
+elsewhere it's `dist/nestcal/Nestcal`.
 
-      - name: Publish release
-        run: |
-          version="$(tr -d '[:space:]' < VERSION).${GITHUB_RUN_NUMBER}"
-          tag="v${version}"
+macOS
+---
 
-          if pr="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" \
-              --jq '.[0] | select(. != null) | "### \(.title) (#\(.number))\n\n\(.body // "")"')"; then
-            echo "$pr" > notes.md
-          else
-            echo "::warning::could not look up the pull request for ${GITHUB_SHA}; releasing without its description"
-            : > notes.md
-          fi
+The app lives in the menu bar only: no Dock icon, no window until a meeting is due.
 
-          cat >> notes.md <<EOF
+Before the first launch:
 
-          **Work in progress.** Please report what you find.
+1. Create `~/.config/nestcal.ini` as shown above. If it's missing, the app writes
+   a stub and exits, and because there's no console you won't see why.
+   Then `chmod 600 ~/.config/nestcal.ini`.
+2. If you downloaded the app from CI rather than building it, macOS will refuse
+   to open it because it isn't notarized. Run `xattr -cr Nestcal.app` once, or
+   right-click the app and choose Open.
 
-          ### Downloads
+If nothing appears in the menu bar, run it from a terminal to see what went wrong:
 
-          | Platform | File |
-          | --- | --- |
-          | macOS (Apple Silicon) | \`nestcal-macos-arm64.zip\` |
-          | macOS (Intel) | \`nestcal-macos-amd64.zip\` |
-          | Linux (x86-64) | \`nestcal-linux-amd64.tar.gz\` |
-          | Windows (x86-64) | \`nestcal-windows-amd64.zip\` |
+```
+Nestcal.app/Contents/MacOS/Nestcal --debug
+```
 
-          \`SHA256SUMS\` has the checksum of each file.
+Known limitations on macOS:
 
-          Create \`~/.config/nestcal.ini\` before the first launch; see the README.
+- The "next event" tooltip doesn't show in the menu bar.
+- The reminder window may not appear over full-screen apps or take keyboard focus.
+- Recent PyQt6 releases need a recent macOS. If the app won't start on an older
+  one, report your macOS version.
 
-          The apps are unsigned. On macOS, run \`xattr -cr Nestcal.app\` once (or right-click and choose Open);
-          on Windows, SmartScreen will warn on first run.
-          EOF
+Linux and Windows
+---
 
-          if gh release view "$tag" > /dev/null 2>&1; then
-            gh release upload "$tag" release/* --clobber
-          else
-            gh release create "$tag" release/* --target "$GITHUB_SHA" \
-              --title "nestcal ${version}" --notes-file notes.md --generate-notes --latest
-          fi
+Run `dist/nestcal/Nestcal` (`Nestcal.exe` on Windows); add `--debug` from a terminal
+to see what it's doing. Create `~/.config/nestcal.ini` first, as on macOS.
+
+- Linux: GNOME needs the AppIndicator extension to show tray icons.
+- Windows: the exe isn't signed, so SmartScreen will warn on first run.
