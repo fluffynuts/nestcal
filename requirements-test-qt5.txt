@@ -1,0 +1,3 @@
+-r requirements-qt5.txt
+pytest
+pytest-qt

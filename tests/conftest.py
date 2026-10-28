@@ -1,3 +1,8 @@
+import os
+
+# Forced, not defaulted: a developer with a real display must not get windows popping up mid-test.
+os.environ["QT_QPA_PLATFORM"] = "offscreen"
+
 from datetime import datetime, timedelta, timezone
 
 import pytest

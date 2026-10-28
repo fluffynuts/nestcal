@@ -65,11 +65,15 @@ Tests
 ---
 
 ```
-pip install -r requirements-test.txt
+pip install -r requirements-test.txt   # or requirements-test-qt5.txt to test the Qt 5 path
 python -m pytest
 ```
 
-CI runs them on Linux and Windows, and a release is only built and published
+`tests/` holds fast unit tests of the core logic. `tests/ui/` drives the real tray app, offscreen
+(no display needed), against a fake `.ics` feed served from the test process: reminders, the tray
+menu and tooltip, the update dialog and the fallback icon.
+
+CI runs them on Linux (Qt 6 and Qt 5) and Windows, and a release is only built and published
 if they pass.
 
 Standalone apps (work in progress)
