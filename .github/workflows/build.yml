@@ -7,15 +7,20 @@ on:
   workflow_dispatch:
 
 jobs:
-  macos:
+  build:
     strategy:
       fail-fast: false
       matrix:
         include:
           - runner: macos-14
-            arch: arm64
+            artifact: Nestcal-macos-arm64
           - runner: macos-15-intel
-            arch: x86_64
+            artifact: Nestcal-macos-x86_64
+          # oldest available Ubuntu: a binary only runs on the glibc it was built against or newer
+          - runner: ubuntu-22.04
+            artifact: Nestcal-linux-x86_64
+          - runner: windows-latest
+            artifact: Nestcal-windows-x86_64
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -24,29 +29,71 @@ jobs:
         with:
           python-version: "3.12"
 
+      # Installed before the build so PyInstaller bundles them, rather than
+      # leaving the app depending on whatever the user's machine has.
+      - name: Install Qt runtime libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libgl1 libglib2.0-0 libdbus-1-3 libfontconfig1 \
+            libfreetype6 libx11-6 libxkbcommon0 libxkbcommon-x11-0 libxcb-cursor0 \
+            libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-render-util0 \
+            libxcb-shape0 libxcb-xkb1
+
       - run: python -m pip install -r requirements-build.txt
 
       - run: pyinstaller --noconfirm nestcal.spec
 
       - name: Check the executable matches the runner architecture
+        if: runner.os == 'macOS'
         run: |
+          expected="$([ "$(uname -m)" = arm64 ] && echo arm64 || echo x86_64)"
           actual="$(lipo -archs dist/Nestcal.app/Contents/MacOS/Nestcal)"
           echo "built for: $actual"
-          [ "$actual" = "${{ matrix.arch }}" ]
+          [ "$actual" = "$expected" ]
 
       # With no feeds configured the app exits 1 with a known message, which
       # proves every bundled import loads without needing a display or a calendar.
       - name: Smoke test the bundled app
+        if: runner.os != 'Windows'
         run: |
-          output="$(HOME="$(mktemp -d)" QT_QPA_PLATFORM=offscreen \
-            dist/Nestcal.app/Contents/MacOS/Nestcal 2>&1 || true)"
+          if [ "$RUNNER_OS" = macOS ]; then exe=dist/Nestcal.app/Contents/MacOS/Nestcal; else exe=dist/nestcal/Nestcal; fi
+          output="$(HOME="$(mktemp -d)" QT_QPA_PLATFORM=offscreen "$exe" 2>&1 || true)"
           echo "$output"
           echo "$output" | grep -q "no feeds configured"
 
-      # ditto keeps the bundle's symlinks and permissions, which upload-artifact's zip drops.
-      - run: ditto -c -k --keepParent dist/Nestcal.app "Nestcal-macos-${{ matrix.arch }}.zip"
+      # The windowed exe has no stdout, so the message can't be read. Exit code 1
+      # plus the config stub having been written is the weaker equivalent.
+      - name: Smoke test the bundled app (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $fakeHome = New-Item -ItemType Directory -Path (Join-Path $env:RUNNER_TEMP "nestcal-home")
+          $env:USERPROFILE = $fakeHome.FullName
+          $env:QT_QPA_PLATFORM = "offscreen"
+          $process = Start-Process -FilePath dist\nestcal\Nestcal.exe -Wait -PassThru
+          Write-Host "exit code: $($process.ExitCode)"
+          if ($process.ExitCode -ne 1) { exit 1 }
+          if (-not (Test-Path (Join-Path $fakeHome.FullName ".config\nestcal.ini"))) { exit 1 }
+
+      # ditto/tar keep the permissions and symlinks that upload-artifact's zip drops.
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        run: ditto -c -k --keepParent dist/Nestcal.app "${{ matrix.artifact }}.zip"
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        run: tar -czf "${{ matrix.artifact }}.tar.gz" -C dist nestcal
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path dist\nestcal -DestinationPath "${{ matrix.artifact }}.zip"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: Nestcal-macos-${{ matrix.arch }}
-          path: Nestcal-macos-${{ matrix.arch }}.zip
+          name: ${{ matrix.artifact }}
+          path: |
+            ${{ matrix.artifact }}.zip
+            ${{ matrix.artifact }}.tar.gz
+          if-no-files-found: error

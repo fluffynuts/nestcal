@@ -54,12 +54,16 @@ Requirements
   - recurring_ical_events
 
 
-macOS app (work in progress)
+Standalone apps (work in progress)
 ---
 
-CI builds `Nestcal.app` for Apple Silicon (arm64) and Intel (x86_64); see the
-`build` workflow's artifacts. To build locally instead, run `./build.sh` on the
-Mac you want to run it on; the app lands in `dist/Nestcal.app`.
+CI builds standalone apps for macOS (Apple Silicon and Intel), Linux and Windows;
+see the `build` workflow's artifacts. To build locally instead, run `./build.sh`
+on the machine you want to run it on. On macOS the app lands in `dist/Nestcal.app`;
+elsewhere it's `dist/nestcal/Nestcal`.
+
+macOS
+---
 
 The app lives in the menu bar only: no Dock icon, no window until a meeting is due.
 
@@ -84,3 +88,12 @@ Known limitations on macOS:
 - The reminder window may not appear over full-screen apps or take keyboard focus.
 - Recent PyQt6 releases need a recent macOS. If the app won't start on an older
   one, report your macOS version.
+
+Linux and Windows
+---
+
+Run `dist/nestcal/Nestcal` (`Nestcal.exe` on Windows); add `--debug` from a terminal
+to see what it's doing. Create `~/.config/nestcal.ini` first, as on macOS.
+
+- Linux: GNOME needs the AppIndicator extension to show tray icons.
+- Windows: the exe isn't signed, so SmartScreen will warn on first run.
