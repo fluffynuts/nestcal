@@ -53,7 +53,6 @@ SEEN_RETENTION_SECONDS = 24 * 60 * 60
 
 if PYQT == 6:
     STAY_ON_TOP = Qt.WindowType.WindowStaysOnTopHint
-    ALIGN_CENTER = Qt.AlignmentFlag.AlignCenter
     TEXT_BROWSER = Qt.TextInteractionFlag.TextBrowserInteraction
     TRAY_TRIGGER = QSystemTrayIcon.ActivationReason.Trigger
     WA_DELETE_ON_CLOSE = Qt.WidgetAttribute.WA_DeleteOnClose
@@ -61,7 +60,6 @@ if PYQT == 6:
     REJECT_ROLE = QMessageBox.ButtonRole.RejectRole
 else:
     STAY_ON_TOP = Qt.WindowStaysOnTopHint
-    ALIGN_CENTER = Qt.AlignCenter
     TEXT_BROWSER = Qt.TextBrowserInteraction
     TRAY_TRIGGER = QSystemTrayIcon.Trigger
     WA_DELETE_ON_CLOSE = Qt.WA_DeleteOnClose
@@ -71,26 +69,38 @@ else:
 
 # --- Tray icon ---
 
+# A flat calendar glyph on a 16x16 grid of units, as (x, y, width, height): three tabs on
+# top, the body outline, then a 3x2 grid of day squares plus one. Matches the common
+# "appointment-soon" themed icon so the fallback looks at home beside it.
+CALENDAR_GLYPH_RECTS = (
+    (0, 0, 2, 3), (4, 0, 8, 3), (14, 0, 2, 3),
+    (0, 3, 16, 1), (0, 3, 1, 13), (15, 3, 1, 13), (0, 15, 16, 1),
+    (3, 5, 2, 2), (7, 5, 2, 2), (11, 5, 2, 2),
+    (3, 8, 2, 2), (7, 8, 2, 2), (11, 8, 2, 2),
+    (11, 11, 2, 2),
+)
+# A mid-tone green stays legible on both light and dark menu bars and panels.
+CALENDAR_GLYPH_COLOR = "#04896a"
+
+
+def draw_calendar_glyph(unit: int) -> QPixmap:
+    pixmap = QPixmap(16 * unit, 16 * unit)
+    pixmap.fill(QColor(0, 0, 0, 0))
+    painter = QPainter(pixmap)
+    for x, y, width, height in CALENDAR_GLYPH_RECTS:
+        painter.fillRect(x * unit, y * unit, width * unit, height * unit,
+                         QColor(CALENDAR_GLYPH_COLOR))
+    painter.end()
+    return pixmap
+
+
 def make_icon() -> QIcon:
     """A themed calendar icon, or a drawn fallback if the theme lacks one."""
     for name in ("appointment-soon", "x-office-calendar", "office-calendar"):
         icon = QIcon.fromTheme(name)
         if not icon.isNull():
             return icon
-    pixmap = QPixmap(64, 64)
-    pixmap.fill(QColor(0, 0, 0, 0))
-    painter = QPainter(pixmap)
-    painter.setBrush(QColor("#3b82f6"))
-    painter.setPen(QColor("#1e3a8a"))
-    painter.drawRoundedRect(8, 12, 48, 44, 6, 6)
-    painter.setPen(QColor("white"))
-    font = QFont()
-    font.setBold(True)
-    font.setPointSize(20)
-    painter.setFont(font)
-    painter.drawText(pixmap.rect(), ALIGN_CENTER, "C")
-    painter.end()
-    return QIcon(pixmap)
+    return QIcon(draw_calendar_glyph(8))
 
 
 # --- Background poller (network off the UI thread) ---
