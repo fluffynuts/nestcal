@@ -1,0 +1,52 @@
+name: build
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: python -m pip install -r requirements-build.txt
+
+      - run: pyinstaller --noconfirm nestcal.spec
+
+      - name: Check the executable matches the runner architecture
+        run: |
+          actual="$(lipo -archs dist/Nestcal.app/Contents/MacOS/Nestcal)"
+          echo "built for: $actual"
+          [ "$actual" = "${{ matrix.arch }}" ]
+
+      # With no feeds configured the app exits 1 with a known message, which
+      # proves every bundled import loads without needing a display or a calendar.
+      - name: Smoke test the bundled app
+        run: |
+          output="$(HOME="$(mktemp -d)" QT_QPA_PLATFORM=offscreen \
+            dist/Nestcal.app/Contents/MacOS/Nestcal 2>&1 || true)"
+          echo "$output"
+          echo "$output" | grep -q "no feeds configured"
+
+      # ditto keeps the bundle's symlinks and permissions, which upload-artifact's zip drops.
+      - run: ditto -c -k --keepParent dist/Nestcal.app "Nestcal-macos-${{ matrix.arch }}.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Nestcal-macos-${{ matrix.arch }}
+          path: Nestcal-macos-${{ matrix.arch }}.zip
