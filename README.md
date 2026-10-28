@@ -53,3 +53,34 @@ Requirements
   - icalendar
   - recurring_ical_events
 
+
+macOS app (work in progress)
+---
+
+CI builds `Nestcal.app` for Apple Silicon (arm64) and Intel (x86_64); see the
+`build` workflow's artifacts. To build locally instead, run `./build.sh` on the
+Mac you want to run it on; the app lands in `dist/Nestcal.app`.
+
+The app lives in the menu bar only: no Dock icon, no window until a meeting is due.
+
+Before the first launch:
+
+1. Create `~/.config/nestcal.ini` as shown above. If it's missing, the app writes
+   a stub and exits, and because there's no console you won't see why.
+   Then `chmod 600 ~/.config/nestcal.ini`.
+2. If you downloaded the app from CI rather than building it, macOS will refuse
+   to open it because it isn't notarized. Run `xattr -cr Nestcal.app` once, or
+   right-click the app and choose Open.
+
+If nothing appears in the menu bar, run it from a terminal to see what went wrong:
+
+```
+Nestcal.app/Contents/MacOS/Nestcal --debug
+```
+
+Known limitations on macOS:
+
+- The "next event" tooltip doesn't show in the menu bar.
+- The reminder window may not appear over full-screen apps or take keyboard focus.
+- Recent PyQt6 releases need a recent macOS. If the app won't start on an older
+  one, report your macOS version.
