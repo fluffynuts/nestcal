@@ -36,7 +36,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [ubuntu-22.04, macos-14, windows-latest]
+        runner: [ubuntu-22.04, windows-latest]
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -55,14 +55,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-14
+          - runner: macos-15
             artifact: nestcal-macos-arm64
             requirements: requirements-build.txt
           - runner: macos-15-intel
             artifact: nestcal-macos-amd64
             requirements: requirements-build.txt
           # Qt 6.10+ needs macOS 13; Qt 5.15 runs on macOS 11 and older, so these serve Monterey and earlier
-          - runner: macos-14
+          - runner: macos-15
             artifact: nestcal-macos-arm64-qt5
             requirements: requirements-build-qt5.txt
           - runner: macos-15-intel

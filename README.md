@@ -69,7 +69,7 @@ pip install -r requirements-test.txt
 python -m pytest
 ```
 
-CI runs them on Linux, macOS and Windows, and a release is only built and published
+CI runs them on Linux and Windows, and a release is only built and published
 if they pass.
 
 Standalone apps (work in progress)
