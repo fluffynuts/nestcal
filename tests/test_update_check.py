@@ -10,11 +10,13 @@ class TestParseVersion:
         ("0.1.42", (0, 1, 42)),
         ("v0.1.42", (0, 1, 42)),
         (" v1.2 ", (1, 2)),
+        ("0.1.42-beta", (0, 1, 42)),
+        ("v0.1.42-beta.1", (0, 1, 42)),
     ])
     def test_reads_numeric_versions_with_optional_v_prefix(self, text, expected):
         assert parse_version(text) == expected
 
-    @pytest.mark.parametrize("text", ["dev", "", "v", "1.2.x", "v1..2", "latest"])
+    @pytest.mark.parametrize("text", ["dev", "", "v", "1.2.x", "v1..2", "latest", "0.1.5-", "-beta"])
     def test_anything_else_is_none(self, text):
         assert parse_version(text) is None
 
@@ -36,6 +38,12 @@ class TestIsNewer:
     ])
     def test_false_when_same_or_older(self, latest, current):
         assert not is_newer(latest, current)
+
+    def test_a_beta_build_is_told_about_a_higher_numbered_release(self):
+        assert is_newer("v0.1.12", "0.1.9-beta")
+
+    def test_a_beta_build_ahead_of_the_latest_release_is_not_told_to_update(self):
+        assert not is_newer("v0.1.8", "0.1.9-beta")
 
     def test_a_dev_build_is_never_told_to_update(self):
         assert not is_newer("v0.1.43", "dev")

@@ -2,7 +2,7 @@ name: build
 
 on:
   push:
-    branches: [master]
+    branches: ['**']
   pull_request:
   workflow_dispatch:
 
@@ -10,6 +10,28 @@ permissions:
   contents: read
 
 jobs:
+  # The single source of the version string: a push to master is a stable release,
+  # everything else (other branches, PRs, manual runs) is a -beta pre-release.
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.compute.outputs.version }}
+      stable: ${{ steps.compute.outputs.stable }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: compute
+        run: |
+          version="$(tr -d '[:space:]' < VERSION).${GITHUB_RUN_NUMBER}"
+          if [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF" = refs/heads/master ]; then
+            echo "stable=true" >> "$GITHUB_OUTPUT"
+          else
+            version="${version}-beta"
+            echo "stable=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "version: ${version}"
+
   test:
     strategy:
       fail-fast: false
@@ -28,7 +50,7 @@ jobs:
       - run: python -m pytest
 
   build:
-    needs: test
+    needs: [test, version]
     strategy:
       fail-fast: false
       matrix:
@@ -63,10 +85,10 @@ jobs:
 
       - run: python -m pip install -r requirements-build.txt
 
-      # Same number as the tag the release job publishes, so the app knows its own version.
+      # Same string as the tag the release job publishes, so the app knows its own version.
       - name: Stamp the version into the build
         shell: bash
-        run: echo "VERSION = \"$(tr -d '[:space:]' < VERSION).${{ github.run_number }}\"" > nestcal_version.py
+        run: echo "VERSION = \"${{ needs.version.outputs.version }}\"" > nestcal_version.py
 
       - run: pyinstaller --noconfirm nestcal.spec
 
@@ -124,11 +146,11 @@ jobs:
             ${{ matrix.artifact }}.tar.gz
           if-no-files-found: error
 
-  # Every push to master publishes a release, versioned VERSION (major.minor) plus
-  # the run number, with fixed asset names so releases/latest/download/<name> links stay valid.
+  # Every push publishes a release. master's is the "latest" one, with fixed asset names
+  # so releases/latest/download/<name> links stay valid; other branches' are -beta pre-releases.
   release:
-    needs: build
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    needs: [version, build]
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -138,6 +160,8 @@ jobs:
       cancel-in-progress: false
     env:
       GH_TOKEN: ${{ github.token }}
+      VERSION_STRING: ${{ needs.version.outputs.version }}
+      STABLE: ${{ needs.version.outputs.stable }}
     steps:
       - uses: actions/checkout@v4
 
@@ -157,7 +181,7 @@ jobs:
 
       - name: Publish release
         run: |
-          version="$(tr -d '[:space:]' < VERSION).${GITHUB_RUN_NUMBER}"
+          version="$VERSION_STRING"
           tag="v${version}"
 
           if pr="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" \
@@ -166,6 +190,13 @@ jobs:
           else
             echo "::warning::could not look up the pull request for ${GITHUB_SHA}; releasing without its description"
             : > notes.md
+          fi
+
+          if [ "$STABLE" = true ]; then
+            release_flags=(--latest)
+          else
+            release_flags=(--prerelease)
+            printf '\n**Pre-release build from branch `%s`.**\n' "$GITHUB_REF_NAME" >> notes.md
           fi
 
           cat >> notes.md <<EOF
@@ -193,5 +224,5 @@ jobs:
             gh release upload "$tag" release/* --clobber
           else
             gh release create "$tag" release/* --target "$GITHUB_SHA" \
-              --title "nestcal ${version}" --notes-file notes.md --generate-notes --latest
+              --title "nestcal ${version}" --notes-file notes.md --generate-notes "${release_flags[@]}"
           fi

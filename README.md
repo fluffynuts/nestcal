@@ -76,7 +76,8 @@ Standalone apps (work in progress)
 ---
 
 Every push to master publishes a release with standalone apps for macOS (Apple Silicon
-and Intel), Linux and Windows; download them from the Releases page. The `build` workflow
+and Intel), Linux and Windows; download them from the Releases page. Pushes to other
+branches publish `-beta` pre-releases, which are never marked as the latest release. The `build` workflow
 also keeps them as artifacts. To build locally instead, run `./build.sh` on the machine
 you want to run it on. On macOS the app lands in `dist/Nestcal.app`;
 elsewhere it's `dist/nestcal/Nestcal`.

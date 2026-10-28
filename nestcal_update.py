@@ -11,8 +11,10 @@ LATEST_RELEASE_API_URL = "https://api.github.com/repos/fluffynuts/nestcal/releas
 
 
 def parse_version(text: str) -> tuple[int, ...] | None:
-    """'v0.1.42' or '0.1.42' -> (0, 1, 42); None for anything else, e.g. 'dev'."""
-    match = re.fullmatch(r"v?(\d+(?:\.\d+)*)", text.strip())
+    """'v0.1.42' or '0.1.42' -> (0, 1, 42); None for anything else, e.g. 'dev'.
+    A suffix such as '-beta' is accepted and ignored: a branch build is compared
+    by its number, so it's told about any release numbered above it."""
+    match = re.fullmatch(r"v?(\d+(?:\.\d+)*)(?:-[0-9A-Za-z.-]+)?", text.strip())
     if match is None:
         return None
     return tuple(int(part) for part in match.group(1).split("."))
