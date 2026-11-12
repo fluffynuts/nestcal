@@ -23,7 +23,7 @@ from datetime import datetime, timedelta
 try:
     from PyQt6.QtWidgets import (
         QApplication, QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
-        QSystemTrayIcon, QMenu, QMessageBox,
+        QSystemTrayIcon, QMenu, QMessageBox, QDialog, QLineEdit,
     )
     from PyQt6.QtCore import Qt, QThread, QObject, pyqtSignal, QTimer, QUrl
     from PyQt6.QtGui import QIcon, QAction, QDesktopServices, QPixmap, QPainter, QColor, QFont
@@ -31,14 +31,14 @@ try:
 except ImportError:
     from PyQt5.QtWidgets import (
         QApplication, QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
-        QSystemTrayIcon, QMenu, QAction, QMessageBox,
+        QSystemTrayIcon, QMenu, QAction, QMessageBox, QDialog, QLineEdit,
     )
     from PyQt5.QtCore import Qt, QThread, QObject, pyqtSignal, QTimer, QUrl
     from PyQt5.QtGui import QIcon, QDesktopServices, QPixmap, QPainter, QColor, QFont
     PYQT = 5
 
 from nestcal_core import (
-    Logger, load_config, get_feeds, get_setting, collect_upcoming,
+    Logger, load_config, get_feeds, add_calendar, validate_calendar, get_setting, collect_upcoming,
     is_due_or_running, prune_seen, format_time_range,
     format_countdown, Occurrence,
 )
@@ -420,6 +420,64 @@ class TrayApp:
         self.app.quit()
 
 
+class SetupDialog(QDialog):
+    """First-run prompt for a calendar's name and .ics link."""
+
+    def __init__(self, icon: QIcon):
+        super().__init__()
+        self.setWindowTitle("nestcal setup")
+        self.setWindowIcon(icon)
+        self.setMinimumWidth(480)
+
+        self.name_edit = QLineEdit()
+        self.name_edit.setPlaceholderText("for example: work")
+        self.url_edit = QLineEdit()
+        self.url_edit.setPlaceholderText("https://calendar.google.com/calendar/ical/.../basic.ics")
+        self.error_label = QLabel()
+        self.error_label.setStyleSheet("color: #c0392b;")
+        self.error_label.setWordWrap(True)
+
+        intro = QLabel("nestcal reminds you before meetings start. To begin, tell it about "
+                       "one calendar. You can add more later in ~/.config/nestcal.ini.")
+        intro.setWordWrap(True)
+        help_link = QLabel(
+            '<a href="https://support.google.com/calendar/answer/37648">'
+            'How do I find my calendar\'s .ics link?</a>')
+        help_link.setOpenExternalLinks(True)
+
+        self.save_button = QPushButton("Save")
+        self.save_button.setDefault(True)
+        self.save_button.clicked.connect(self._save)
+        cancel_button = QPushButton("Cancel")
+        cancel_button.clicked.connect(self.reject)
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        buttons.addWidget(cancel_button)
+        buttons.addWidget(self.save_button)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(intro)
+        layout.addWidget(QLabel("Calendar name"))
+        layout.addWidget(self.name_edit)
+        layout.addWidget(QLabel("Calendar .ics link (keep this private)"))
+        layout.addWidget(self.url_edit)
+        layout.addWidget(help_link)
+        layout.addWidget(self.error_label)
+        layout.addLayout(buttons)
+
+    def _save(self) -> None:
+        problem = validate_calendar(self.name_edit.text(), self.url_edit.text())
+        if problem:
+            self.error_label.setText(problem)
+            return
+        try:
+            add_calendar(self.name_edit.text(), self.url_edit.text())
+        except OSError as e:
+            self.error_label.setText(f"Couldn't save the settings: {e}")
+            return
+        self.accept()
+
+
 def main() -> None:
     logger = Logger("--debug" in sys.argv)
     config = load_config(logger)
@@ -432,6 +490,10 @@ def main() -> None:
         print("nestcal: no system tray available", file=sys.stderr)
 
     feeds = get_feeds(config, logger)
+    if not feeds:
+        if SetupDialog(make_icon()).exec():
+            config = load_config(logger)
+            feeds = get_feeds(config, logger)
     if not feeds:
         print(f"nestcal: no feeds configured; add calendars under [calendars] "
               f"in ~/.config/nestcal.ini", file=sys.stderr)

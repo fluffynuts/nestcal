@@ -68,7 +68,7 @@ def load_config(logger: Logger) -> configparser.ConfigParser:
     Load config, creating a 0600 commented stub if absent (the ICS URLs are
     bearer secrets). Warns if an existing file is group/other-accessible.
     """
-    config = configparser.ConfigParser()
+    config = configparser.ConfigParser(interpolation=None)  # URLs contain literal %
     config.optionxform = str  # preserve calendar-label case
 
     if CONFIG_PATH.exists():
@@ -94,6 +94,54 @@ def load_config(logger: Logger) -> configparser.ConfigParser:
         )
     config.read(CONFIG_PATH)
     return config
+
+
+def normalise_ics_url(url: str) -> str:
+    """Strip whitespace; webcal:// (what Apple/Outlook hand out) is https underneath."""
+    url = url.strip()
+    if url.lower().startswith("webcal://"):
+        url = "https://" + url[len("webcal://"):]
+    return url
+
+
+def validate_calendar(label: str, url: str) -> str | None:
+    """Return a message for the user if the label/url can't be saved, else None."""
+    label, url = label.strip(), normalise_ics_url(url)
+    if not label:
+        return "Please enter a name for the calendar, for example: work"
+    if any(c in label for c in "=:") or label[0] in "#;[":
+        return "The name can't contain = or : or start with # ; or ["
+    parts = urlsplit(url)
+    if parts.scheme not in ("http", "https") or not parts.netloc:
+        return "The link should start with https:// (it usually ends in .ics)"
+    return None
+
+
+def add_calendar(label: str, url: str) -> None:
+    """
+    Add `label = url` under [calendars] in CONFIG_PATH, leaving the rest of the
+    file (comments, settings) untouched. Creates the file if needed.
+    """
+    problem = validate_calendar(label, url)
+    if problem:
+        raise ValueError(problem)
+    entry = f"{label.strip()} = {normalise_ics_url(url)}\n"
+
+    lines = CONFIG_PATH.read_text().splitlines(keepends=True) if CONFIG_PATH.exists() else []
+    header = next((i for i, l in enumerate(lines) if l.strip().lower() == "[calendars]"), None)
+    if header is None:
+        if lines and not lines[-1].endswith("\n"):
+            lines[-1] += "\n"
+        lines += ["\n[calendars]\n", entry]
+    else:
+        if not lines[header].endswith("\n"):
+            lines[header] += "\n"
+        lines.insert(header + 1, entry)
+
+    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(CONFIG_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.writelines(lines)
 
 
 def get_setting(config: configparser.ConfigParser, key: str) -> str:

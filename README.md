@@ -13,8 +13,9 @@ https://support.google.com/calendar/answer/37648?hl=en#zippy=%2Cget-your-calenda
 Usage
 ---
 
-Run once to create a config file at ~/.config/nestcal.ini. The app won't stay open, but now
-you can go and configure it:
+On first run, with no calendars configured, nestcal asks for a calendar name (eg "work") and its
+.ics link, and saves them to ~/.config/nestcal.ini. To add more calendars or change settings, edit
+that file:
 
 ```
 # nestcal config
@@ -98,9 +99,8 @@ The app lives in the menu bar only: no Dock icon, no window until a meeting is d
 
 Before the first launch:
 
-1. Create `~/.config/nestcal.ini` as shown above. If it's missing, the app writes
-   a stub and exits, and because there's no console you won't see why.
-   Then `chmod 600 ~/.config/nestcal.ini`.
+1. Launch the app: with no calendars configured it asks for a name and .ics link and writes
+   `~/.config/nestcal.ini` (mode 600) for you. If you'd rather write that file by hand, see above.
 2. If you downloaded the app from CI rather than building it, macOS will refuse
    to open it because it isn't notarized. Run `xattr -cr Nestcal.app` once, or
    right-click the app and choose Open.
@@ -122,7 +122,7 @@ Linux and Windows
 ---
 
 Run `dist/nestcal/Nestcal` (`Nestcal.exe` on Windows); add `--debug` from a terminal
-to see what it's doing. Create `~/.config/nestcal.ini` first, as on macOS.
+to see what it's doing. If no calendars are configured it asks for one on first run, as on macOS.
 
 - Linux: GNOME needs the AppIndicator extension to show tray icons.
 - Windows: the exe isn't signed, so SmartScreen will warn on first run.
