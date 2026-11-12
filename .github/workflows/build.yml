@@ -126,13 +126,13 @@ jobs:
           echo "built for: $actual"
           [ "$actual" = "$expected" ]
 
-      # With no feeds configured the app exits 1 with a known message, which
+      # With no feeds configured (and the first-run dialog disabled) the app exits 1 with a known message, which
       # proves every bundled import loads without needing a display or a calendar.
       - name: Smoke test the bundled app
         if: runner.os != 'Windows'
         run: |
           if [ "$RUNNER_OS" = macOS ]; then exe=dist/Nestcal.app/Contents/MacOS/Nestcal; else exe=dist/nestcal/Nestcal; fi
-          output="$(HOME="$(mktemp -d)" QT_QPA_PLATFORM=offscreen "$exe" 2>&1 || true)"
+          output="$(HOME="$(mktemp -d)" QT_QPA_PLATFORM=offscreen NO_FIRST_TIME_SETUP=1 "$exe" 2>&1 || true)"
           echo "$output"
           echo "$output" | grep -q "no feeds configured"
 
@@ -145,6 +145,7 @@ jobs:
           $fakeHome = New-Item -ItemType Directory -Path (Join-Path $env:RUNNER_TEMP "nestcal-home")
           $env:USERPROFILE = $fakeHome.FullName
           $env:QT_QPA_PLATFORM = "offscreen"
+          $env:NO_FIRST_TIME_SETUP = "1"
           $process = Start-Process -FilePath dist\nestcal\Nestcal.exe -Wait -PassThru
           Write-Host "exit code: $($process.ExitCode)"
           if ($process.ExitCode -ne 1) { exit 1 }

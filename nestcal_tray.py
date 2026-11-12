@@ -14,6 +14,7 @@ window class "nestcal" (or title prefix "Meeting:") -> Keep above: Force, Yes.
 On X11 the hint is honoured directly.
 """
 
+import os
 import sys
 import threading
 from datetime import datetime, timedelta
@@ -490,7 +491,7 @@ def main() -> None:
         print("nestcal: no system tray available", file=sys.stderr)
 
     feeds = get_feeds(config, logger)
-    if not feeds:
+    if not feeds and os.environ.get("NO_FIRST_TIME_SETUP") != "1":  # CI has nobody to answer the dialog
         if SetupDialog(make_icon()).exec():
             config = load_config(logger)
             feeds = get_feeds(config, logger)

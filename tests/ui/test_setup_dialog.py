@@ -56,3 +56,34 @@ def test_cancel_closes_without_writing_a_calendar(dialog, config_path):
 
     assert not dialog.isVisible()
     assert not config_path.exists()
+
+
+@pytest.fixture
+def run_main(qapp, config_path, monkeypatch):
+    """Runs the real main() against the existing QApplication; returns its exit code."""
+    monkeypatch.setattr(nestcal_tray, "QApplication", lambda argv: qapp)
+    monkeypatch.setattr(nestcal_tray.sys, "argv", ["nestcal"])
+
+    def run() -> int:
+        with pytest.raises(SystemExit) as exit_info:
+            nestcal_tray.main()
+        return exit_info.value.code
+    return run
+
+
+def test_first_time_setup_can_be_disabled_for_unattended_runs(run_main, monkeypatch, capsys):
+    monkeypatch.setenv("NO_FIRST_TIME_SETUP", "1")
+    monkeypatch.setattr(nestcal_tray.SetupDialog, "exec",
+                        lambda self: pytest.fail("the setup dialog was shown"))
+
+    assert run_main() == 1
+    assert "no feeds configured" in capsys.readouterr().err
+
+
+def test_without_the_variable_main_offers_the_setup_dialog(run_main, monkeypatch, capsys):
+    monkeypatch.delenv("NO_FIRST_TIME_SETUP", raising=False)
+    shown = []
+    monkeypatch.setattr(nestcal_tray.SetupDialog, "exec", lambda self: shown.append(True) or 0)
+
+    assert run_main() == 1
+    assert shown == [True]
