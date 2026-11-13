@@ -100,7 +100,16 @@ def test_turning_update_checks_off_stops_the_timer_and_hides_the_link(qtbot, sta
     tab.updates_checkbox.setChecked(False)
     tab.save_button.click()
 
-    qtbot.waitUntil(lambda: not app.tray_app.update_timer.isActive(), timeout=10_000)
+    # Two things can go wrong, and a timeout alone can't say which: the save itself failing,
+    # or the saved change never reaching the app. Say which.
+    assert tab.error_label.text() == "", f"the save failed: {tab.error_label.text()}"
+    assert "check_for_updates = false" in app.config_path.read_text(), "the save wrote nothing"
+
+    def timer_stopped():
+        assert not app.tray_app.update_timer.isActive(), (
+            "the file was saved but the app did not apply it; "
+            f"window banner: {app.tray_app.main_window.problem_label.text()!r}")
+    qtbot.waitUntil(timer_stopped, timeout=10_000)
     assert app.tray_app.main_window.events_tab.update_label.isHidden()
 
 
