@@ -119,3 +119,13 @@ def test_with_checks_off_there_is_no_timer(start_app, monkeypatch):
     app = start_app(check_for_updates="false")
 
     assert not app.tray_app.update_timer.isActive()
+
+
+def test_a_damaged_state_file_does_not_stop_the_update_prompt(start_app, monkeypatch):
+    """An uncaught exception in a Qt slot aborts the real app, so this must not raise."""
+    app, shown = start_with_clock(start_app, monkeypatch)
+    nestcal_update.STATE_PATH.write_text('{"update_prompts": {"version": "v0.9.0", "count": 1}}')
+
+    app.tray_app.on_update_available("v0.9.0")
+
+    assert shown == ["v0.9.0"]

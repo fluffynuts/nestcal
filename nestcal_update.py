@@ -3,7 +3,7 @@
 import json
 import os
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import requests
@@ -88,20 +88,35 @@ def save_state(state: dict, logger: Logger) -> None:
         logger.log(f"could not save the state file: {e}")
 
 
-def should_prompt(state: dict, latest: str, now: datetime) -> bool:
-    """Whether to pop up the update dialog for release `latest` now."""
+def _prompt_record(state: dict, latest: str) -> tuple[int, datetime | None]:
+    """(how many times prompted about `latest`, when last): (0, None) when there's no record
+    for it or the record can't be understood. This file is edited by hand and read inside a Qt
+    slot, where an exception aborts the whole app, so nothing in it may raise."""
     prompts = state.get("update_prompts")
     if not isinstance(prompts, dict) or prompts.get("version") != latest:
+        return 0, None
+    count = prompts.get("count")
+    if isinstance(count, bool) or not isinstance(count, int) or count < 1:
+        return 0, None
+    try:
+        last = datetime.fromisoformat(prompts["last"])
+    except (KeyError, TypeError, ValueError):
+        # Past the last back-off the date no longer matters: it is forgotten either way.
+        return (count, None) if count > len(PROMPT_BACKOFF_DAYS) else (0, None)
+    return count, last if last.tzinfo else last.replace(tzinfo=timezone.utc)
+
+
+def should_prompt(state: dict, latest: str, now: datetime) -> bool:
+    """Whether to pop up the update dialog for release `latest` now."""
+    count, last = _prompt_record(state, latest)
+    if count == 0:
         return True
-    count = prompts.get("count", 0)
     if count > len(PROMPT_BACKOFF_DAYS):
         return False
-    wait = timedelta(days=PROMPT_BACKOFF_DAYS[count - 1])
-    return now >= datetime.fromisoformat(prompts["last"]) + wait
+    return now >= last + timedelta(days=PROMPT_BACKOFF_DAYS[count - 1])
 
 
 def record_prompt(state: dict, latest: str, now: datetime) -> dict:
     """The state after having prompted about `latest` at `now`."""
-    prompts = state.get("update_prompts")
-    count = prompts.get("count", 0) if isinstance(prompts, dict) and prompts.get("version") == latest else 0
+    count, _ = _prompt_record(state, latest)
     return {**state, "update_prompts": {"version": latest, "count": count + 1, "last": now.isoformat()}}

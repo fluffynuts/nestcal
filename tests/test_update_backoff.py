@@ -88,3 +88,51 @@ class TestStateFile:
         save_state({"x": 1}, Logger(True))
 
         assert "could not save" in capsys.readouterr().err
+
+
+class TestDamagedState:
+    """The state file is user-editable and read in a Qt slot, where an exception aborts the
+    app. Anything that can't be understood means 'never prompted about this release'."""
+
+    LAST = T0.isoformat()
+
+    @pytest.mark.parametrize("prompts", [
+        {"version": "v0.2.0", "count": 1},                                   # no 'last'
+        {"version": "v0.2.0", "count": 1, "last": "yesterday"},              # not a date
+        {"version": "v0.2.0", "count": 1, "last": 12345},                    # not a string
+        {"version": "v0.2.0", "count": 1, "last": None},
+        {"version": "v0.2.0", "last": LAST},                                 # no 'count'
+        {"version": "v0.2.0", "count": "2", "last": LAST},                   # text count
+        {"version": "v0.2.0", "count": 1.5, "last": LAST},
+        {"version": "v0.2.0", "count": True, "last": LAST},
+        {"version": "v0.2.0", "count": 0, "last": LAST},
+        {"version": "v0.2.0", "count": -3, "last": LAST},
+        {"version": "v0.2.0", "count": None, "last": LAST},
+    ])
+    def test_a_record_that_makes_no_sense_means_prompt_again_and_never_raises(self, prompts):
+        assert should_prompt({"update_prompts": prompts}, "v0.2.0", after(0.1))
+
+    @pytest.mark.parametrize("prompts", ["a string", 7, ["a", "list"], None])
+    def test_a_record_that_is_not_even_a_mapping_means_prompt_again(self, prompts):
+        assert should_prompt({"update_prompts": prompts}, "v0.2.0", T0)
+
+    def test_a_date_without_a_timezone_is_read_as_utc(self):
+        naive = {"update_prompts": {"version": "v0.2.0", "count": 1, "last": "2026-11-13T09:00:00"}}
+
+        assert not should_prompt(naive, "v0.2.0", after(1.9))
+        assert should_prompt(naive, "v0.2.0", after(2))
+
+    def test_a_huge_count_with_a_garbled_date_still_means_forget_that_release(self):
+        forgotten = {"update_prompts": {"version": "v0.2.0", "count": 3, "last": "garbled"}}
+
+        assert not should_prompt(forgotten, "v0.2.0", after(365))
+
+    @pytest.mark.parametrize("prompts", [
+        {"version": "v0.2.0", "count": "2", "last": LAST},
+        {"version": "v0.2.0", "count": None},
+        "nonsense",
+    ])
+    def test_recording_over_a_damaged_record_starts_it_again_at_one(self, prompts):
+        recorded = record_prompt({"update_prompts": prompts}, "v0.2.0", after(5))
+
+        assert recorded["update_prompts"] == {"version": "v0.2.0", "count": 1, "last": after(5).isoformat()}
