@@ -1,6 +1,9 @@
+import threading
+
 import pytest
 
 import nestcal_calendar_dialog
+import nestcal_tray
 import nestcal_core
 from nestcal_core import FeedCheck, read_config
 
@@ -219,16 +222,42 @@ def test_testing_a_malformed_link_complains_without_fetching(dialog):
     assert d.check_label.text() == ""
 
 
-def test_a_result_for_a_link_that_has_since_been_edited_is_discarded(qtbot, dialog):
-    dialog.results[A] = FeedCheck(True, "Looks good: 3 events found")
-    d = dialog()
+def test_a_result_for_a_link_that_has_since_been_edited_is_discarded(qtbot):
+    gate = threading.Event()
+
+    def check_held_until_released(url):
+        assert gate.wait(10), "the test never released the check"
+        return FeedCheck(True, "Looks good: 3 events found")
+    d = nestcal_calendar_dialog.CalendarDialog(
+        nestcal_tray.make_icon(), title="t", check=check_held_until_released)
+    qtbot.addWidget(d)
+    d.show()
     d.url_edit.setText(A)
     d.test_button.click()
-    d.url_edit.setText(B)  # edited while the test was running
+    d.url_edit.setText(B)  # edited while the check is still running
 
-    qtbot.wait(200)
+    with qtbot.waitSignal(d._checked, timeout=10_000):  # the result has now been delivered to the dialog
+        gate.set()
 
     assert d.check_label.text() == ""
+    assert d.test_button.isEnabled()
+
+
+def test_the_result_of_a_check_that_was_not_overtaken_is_shown(qtbot):
+    """The control for the test above: the same flow, without the edit, does show the result."""
+    gate = threading.Event()
+    d = nestcal_calendar_dialog.CalendarDialog(
+        nestcal_tray.make_icon(), title="t",
+        check=lambda url: gate.wait(10) and FeedCheck(True, "Looks good: 3 events found"))
+    qtbot.addWidget(d)
+    d.show()
+    d.url_edit.setText(A)
+    d.test_button.click()
+
+    with qtbot.waitSignal(d._checked, timeout=10_000):
+        gate.set()
+
+    assert d.check_label.text() == "Looks good: 3 events found"
 
 
 def test_testing_against_a_real_feed(qtbot, feed_server):
