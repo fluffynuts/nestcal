@@ -9,6 +9,7 @@ tray app and an eventual Nestray integration.
 """
 
 import configparser
+import contextlib
 import os
 import re
 import stat
@@ -164,10 +165,16 @@ def _write_config_lines(lines: list[str]) -> None:
     target = CONFIG_PATH.resolve()
     target.parent.mkdir(parents=True, exist_ok=True)
     temp = target.with_name(target.name + ".tmp")
-    fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as f:
-        f.writelines(lines)
-    os.replace(temp, target)
+    try:
+        fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.writelines(lines)
+        os.replace(temp, target)
+    except OSError:
+        # The temp file holds the calendar URLs, which are secrets: never leave it lying about.
+        with contextlib.suppress(OSError):
+            temp.unlink(missing_ok=True)
+        raise
 
 
 def _is_calendar_entry(line: str) -> bool:

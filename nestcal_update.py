@@ -1,5 +1,6 @@
 """Finding out whether a newer nestcal release exists on GitHub."""
 
+import contextlib
 import json
 import os
 import re
@@ -85,6 +86,8 @@ def save_state(state: dict, logger: Logger) -> None:
         temp.write_text(json.dumps(state))
         os.replace(temp, STATE_PATH)
     except OSError as e:
+        with contextlib.suppress(OSError):
+            temp.unlink(missing_ok=True)
         logger.log(f"could not save the state file: {e}")
 
 

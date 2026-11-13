@@ -140,3 +140,17 @@ class TestReadConfig:
         import configparser
         with pytest.raises(configparser.Error):
             read_config()
+
+
+def test_a_failed_replace_raises_and_leaves_no_temp_file_with_the_urls_in_it(config_path, monkeypatch):
+    config_path.write_text("[calendars]\nwork = " + A + "\n")
+
+    def refuse(src, dst):
+        raise PermissionError("the file is in use")
+    monkeypatch.setattr(nestcal_core.os, "replace", refuse)
+
+    with pytest.raises(PermissionError):
+        save_calendars([("work", A), ("home", B)])
+
+    assert sorted(p.name for p in config_path.parent.iterdir()) == ["nestcal.ini"]
+    assert config_path.read_text() == "[calendars]\nwork = " + A + "\n"

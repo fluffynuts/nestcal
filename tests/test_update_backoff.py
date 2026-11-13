@@ -136,3 +136,17 @@ class TestDamagedState:
         recorded = record_prompt({"update_prompts": prompts}, "v0.2.0", after(5))
 
         assert recorded["update_prompts"] == {"version": "v0.2.0", "count": 1, "last": after(5).isoformat()}
+
+
+def test_a_failed_replace_when_saving_state_leaves_no_temp_file(tmp_path, monkeypatch, capsys):
+    path = tmp_path / "nestcal.state.json"
+    monkeypatch.setattr(nestcal_update, "STATE_PATH", path)
+
+    def refuse(src, dst):
+        raise PermissionError("the file is in use")
+    monkeypatch.setattr(nestcal_update.os, "replace", refuse)
+
+    save_state({"x": 1}, Logger(True))
+
+    assert list(tmp_path.iterdir()) == []
+    assert "could not save" in capsys.readouterr().err
