@@ -2,11 +2,16 @@
 
 try:
     from PyQt6.QtWidgets import (
-        QAbstractItemView, QCheckBox, QDialog, QFormLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMessageBox,
-        QProxyStyle, QPushButton, QSpinBox, QStyle, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
+        QAbstractItemView, QApplication, QCheckBox, QDialog, QFormLayout, QHBoxLayout, QHeaderView,
+        QLabel, QLineEdit, QMenu, QMessageBox, QProxyStyle, QPushButton, QSpinBox, QStyle,
+        QSystemTrayIcon, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
     )
-    from PyQt6.QtCore import QFileSystemWatcher, QObject, Qt, QTimer, QUrl, pyqtSignal
-    from PyQt6.QtGui import QDesktopServices, QIcon
+    from PyQt6.QtCore import (
+        QFileSystemWatcher, QObject, Qt, QThread, QTimer, QUrl, pyqtSignal,
+    )
+    from PyQt6.QtGui import (  # QAction moved here from QtWidgets in Qt 6
+        QAction, QColor, QDesktopServices, QFont, QIcon, QPainter, QPixmap,
+    )
     PYQT = 6
     PLAIN_TEXT = Qt.TextFormat.PlainText
     ALIGN_LEFT_TOP = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
@@ -20,11 +25,14 @@ try:
     NO = QMessageBox.StandardButton.No
 except ImportError:
     from PyQt5.QtWidgets import (
-        QAbstractItemView, QCheckBox, QDialog, QFormLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMessageBox,
-        QProxyStyle, QPushButton, QSpinBox, QStyle, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
+        QAbstractItemView, QAction, QApplication, QCheckBox, QDialog, QFormLayout, QHBoxLayout,
+        QHeaderView, QLabel, QLineEdit, QMenu, QMessageBox, QProxyStyle, QPushButton, QSpinBox,
+        QStyle, QSystemTrayIcon, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
     )
-    from PyQt5.QtCore import QFileSystemWatcher, QObject, Qt, QTimer, QUrl, pyqtSignal
-    from PyQt5.QtGui import QDesktopServices, QIcon
+    from PyQt5.QtCore import (
+        QFileSystemWatcher, QObject, Qt, QThread, QTimer, QUrl, pyqtSignal,
+    )
+    from PyQt5.QtGui import QColor, QDesktopServices, QFont, QIcon, QPainter, QPixmap
     PYQT = 5
     PLAIN_TEXT = Qt.PlainText
     ALIGN_LEFT_TOP = Qt.AlignLeft | Qt.AlignTop

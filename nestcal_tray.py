@@ -20,25 +20,11 @@ import sys
 import threading
 from datetime import datetime, timedelta, timezone
 
-# --- Qt import with PyQt6 -> PyQt5 fallback (mirrors Nestray) ---
-
-try:
-    from PyQt6.QtWidgets import (
-        QApplication, QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
-        QSystemTrayIcon, QMenu, QMessageBox,
-    )
-    from PyQt6.QtCore import Qt, QThread, QObject, pyqtSignal, QTimer, QUrl
-    from PyQt6.QtGui import QIcon, QAction, QDesktopServices, QPixmap, QPainter, QColor, QFont
-    PYQT = 6
-except ImportError:
-    from PyQt5.QtWidgets import (
-        QApplication, QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
-        QSystemTrayIcon, QMenu, QAction, QMessageBox,
-    )
-    from PyQt5.QtCore import Qt, QThread, QObject, pyqtSignal, QTimer, QUrl
-    from PyQt5.QtGui import QIcon, QDesktopServices, QPixmap, QPainter, QColor, QFont
-    PYQT = 5
-
+from nestcal_qt import (
+    PYQT, QAction, QApplication, QColor, QDesktopServices, QFont, QHBoxLayout, QIcon, QLabel,
+    QMenu, QMessageBox, QObject, QPainter, QPixmap, QPushButton, QSystemTrayIcon, QThread,
+    QTimer, QUrl, QVBoxLayout, QWidget, Qt, pyqtSignal,
+)
 import nestcal_core
 from nestcal_calendar_dialog import SetupDialog
 from nestcal_config_watch import ConfigWatcher
