@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+import nestcal_core
 import nestcal_update
 from nestcal_core import Logger
 from nestcal_update import load_state, record_prompt, save_state, should_prompt
@@ -144,7 +145,7 @@ def test_a_failed_replace_when_saving_state_leaves_no_temp_file(tmp_path, monkey
 
     def refuse(src, dst):
         raise PermissionError("the file is in use")
-    monkeypatch.setattr(nestcal_update.os, "replace", refuse)
+    monkeypatch.setattr(nestcal_core.os, "replace", refuse)
 
     save_state({"x": 1}, Logger(True))
 

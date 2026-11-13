@@ -182,6 +182,25 @@ def add_calendar(label: str, url: str) -> None:
     _write_config_lines(lines)
 
 
+# On Windows, replacing a file that something else has open (antivirus scanning what was just
+# written, an indexer) fails with "Access is denied" for a moment; CI showed a save milliseconds
+# after the file was written failing that way. Elsewhere a denied replace is a real permissions
+# problem, and waiting would only delay the error.
+RETRY_DENIED_REPLACE = sys.platform == "win32"
+REPLACE_RETRY_DELAYS = (0.02, 0.05, 0.1, 0.2, 0.4)  # seconds: under a second in all
+
+
+def replace_file(source: Path, target: Path) -> None:
+    """os.replace, tried again for a moment on Windows if it's denied; PermissionError if it stays denied."""
+    for delay in REPLACE_RETRY_DELAYS if RETRY_DENIED_REPLACE else ():
+        try:
+            os.replace(source, target)
+            return
+        except PermissionError:
+            time.sleep(delay)
+    os.replace(source, target)
+
+
 def _write_config_lines(lines: list[str]) -> None:
     """Replace the config atomically (a watcher or a crash never sees half a file),
     0600 because the URLs are secrets. Writes through a symlink rather than replacing
@@ -193,7 +212,7 @@ def _write_config_lines(lines: list[str]) -> None:
         fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w") as f:
             f.writelines(lines)
-        os.replace(temp, target)
+        replace_file(temp, target)
     except OSError:
         # The temp file holds the calendar URLs, which are secrets: never leave it lying about.
         with contextlib.suppress(OSError):

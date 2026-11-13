@@ -2,14 +2,13 @@
 
 import contextlib
 import json
-import os
 import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import requests
 
-from nestcal_core import CONFIG_DIR, HTTP_TIMEOUT, USER_AGENT, Logger
+from nestcal_core import CONFIG_DIR, HTTP_TIMEOUT, USER_AGENT, Logger, replace_file
 
 # Not in config.ini: that is the user's to edit, and writing here must not look like an edit.
 STATE_PATH = CONFIG_DIR / "state.json"
@@ -84,7 +83,7 @@ def save_state(state: dict, logger: Logger) -> None:
     try:
         STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
         temp.write_text(json.dumps(state))
-        os.replace(temp, STATE_PATH)
+        replace_file(temp, STATE_PATH)
     except OSError as e:
         with contextlib.suppress(OSError):
             temp.unlink(missing_ok=True)
