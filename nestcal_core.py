@@ -45,6 +45,7 @@ SETTINGS_DEFAULTS = {
     "window_hours": "24",     # lookahead horizon
     "snooze_minutes": "1",    # snooze duration on the reminder window
     "check_interval": "5",    # seconds between due-checks (firing precision)
+    "check_for_updates": "true",  # ask GitHub whether a newer nestcal exists
 }
 
 
@@ -63,13 +64,28 @@ class Logger:
 
 # --- Config ---
 
+def _new_parser() -> configparser.ConfigParser:
+    config = configparser.ConfigParser(interpolation=None)  # URLs contain literal %
+    config.optionxform = str  # preserve calendar-label case
+    return config
+
+
+def read_config() -> configparser.ConfigParser:
+    """Read CONFIG_PATH as it is right now. Unlike load_config this never creates the
+    file and never hides a problem: a missing file raises OSError, a malformed one
+    configparser.Error, so a caller reloading after an edit can keep its last good config."""
+    config = _new_parser()
+    with open(CONFIG_PATH) as f:
+        config.read_file(f)
+    return config
+
+
 def load_config(logger: Logger) -> configparser.ConfigParser:
     """
     Load config, creating a 0600 commented stub if absent (the ICS URLs are
     bearer secrets). Warns if an existing file is group/other-accessible.
     """
-    config = configparser.ConfigParser(interpolation=None)  # URLs contain literal %
-    config.optionxform = str  # preserve calendar-label case
+    config = _new_parser()
 
     if CONFIG_PATH.exists():
         config.read(CONFIG_PATH)
@@ -138,10 +154,182 @@ def add_calendar(label: str, url: str) -> None:
             lines[header] += "\n"
         lines.insert(header + 1, entry)
 
-    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(CONFIG_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    _write_config_lines(lines)
+
+
+def _write_config_lines(lines: list[str]) -> None:
+    """Replace the config atomically (a watcher or a crash never sees half a file),
+    0600 because the URLs are secrets. Writes through a symlink rather than replacing
+    it, since people keep their config in a dotfiles repo."""
+    target = CONFIG_PATH.resolve()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temp = target.with_name(target.name + ".tmp")
+    fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as f:
         f.writelines(lines)
+    os.replace(temp, target)
+
+
+def _is_calendar_entry(line: str) -> bool:
+    stripped = line.strip()
+    return bool(stripped) and stripped[0] not in "#;"
+
+
+def _section_span(lines: list[str], name: str) -> tuple[int, int] | None:
+    """(index of the [name] header, index of the next header or end of file)."""
+    header = next((i for i, l in enumerate(lines) if l.strip().lower() == f"[{name}]"), None)
+    if header is None:
+        return None
+    end = next((i for i in range(header + 1, len(lines))
+                if lines[i].strip().startswith("[") and lines[i].strip().endswith("]")), len(lines))
+    return header, end
+
+
+def _read_lines() -> list[str]:
+    return CONFIG_PATH.read_text().splitlines(keepends=True) if CONFIG_PATH.exists() else []
+
+
+def _rewrite_section(name: str, rewrite) -> None:
+    """Apply `rewrite(body_lines) -> body_lines` to the lines under [name], creating the
+    section at the end of the file if it's missing. Everything outside the section is kept as is."""
+    lines = _read_lines()
+    span = _section_span(lines, name)
+    if span is None:
+        if lines and not lines[-1].endswith("\n"):
+            lines[-1] += "\n"
+        _write_config_lines(lines + ([] if not lines else ["\n"]) + [f"[{name}]\n"] + rewrite([]))
+        return
+    header, end = span
+    if not lines[header].endswith("\n"):
+        lines[header] += "\n"
+    _write_config_lines(lines[:header + 1] + rewrite(lines[header + 1:end]) + lines[end:])
+
+
+def _after_last_content(body: list[str]) -> int:
+    """Where to add new lines to a section: straight after its last non-blank line, so the
+    blank line that separates it from the next section stays a separator."""
+    return next((i + 1 for i in range(len(body) - 1, -1, -1) if body[i].strip()), 0)
+
+
+def _with_newline_at(body: list[str], position: int) -> list[str]:
+    if position and not body[position - 1].endswith("\n"):
+        body = body[:position - 1] + [body[position - 1] + "\n"] + body[position:]
+    return body
+
+
+def save_calendars(calendars: list[tuple[str, str]]) -> None:
+    """
+    Make the entries under [calendars] exactly `calendars`, in order, leaving every
+    other line of the file (comments, settings, blank lines) untouched. Entries
+    take the place of the first old entry; comments in the section stay where they were.
+    """
+    names = [label.strip() for label, _ in calendars]
+    for label, url in calendars:
+        problem = validate_calendar(label, url)
+        if problem:
+            raise ValueError(problem)
+    for name in set(names):
+        if names.count(name) > 1:
+            raise ValueError(f"There is more than one calendar called '{name}'")
+    entries = [f"{label.strip()} = {normalise_ics_url(url)}\n" for label, url in calendars]
+
+    def rewrite(body: list[str]) -> list[str]:
+        first_entry = next((i for i, l in enumerate(body) if _is_calendar_entry(l)), None)
+        kept = [l for l in body if not _is_calendar_entry(l)]
+        if first_entry is None:
+            first_entry = _after_last_content(kept)
+        kept = _with_newline_at(kept, first_entry)
+        return kept[:first_entry] + entries + kept[first_entry:]
+    _rewrite_section("calendars", rewrite)
+
+
+# --- Settings ---
+
+@dataclass(frozen=True)
+class Settings:
+    poll_interval: int
+    lead_minutes: float
+    window_hours: float
+    snooze_minutes: int
+    check_interval: int
+    check_for_updates: bool
+
+
+def _parse_setting(key: str, text: str):
+    """The typed value of a setting, or ValueError saying what's wrong with it."""
+    text = text.strip()
+    if key == "check_for_updates":
+        try:
+            return configparser.ConfigParser.BOOLEAN_STATES[text.lower()]
+        except KeyError:
+            raise ValueError(f"check_for_updates must be true or false, not '{text}'") from None
+    whole = key in ("poll_interval", "snooze_minutes", "check_interval")
+    try:
+        value = int(text) if whole else float(text)
+    except ValueError:
+        kind = "a whole number" if whole else "a number"
+        raise ValueError(f"{key} must be {kind}, not '{text}'") from None
+    if key == "window_hours":
+        if value <= 0:
+            raise ValueError(f"{key} must be more than 0, not '{text}'")
+    elif value < (0 if key == "lead_minutes" else 1):
+        raise ValueError(f"{key} must be at least {0 if key == 'lead_minutes' else 1}, not '{text}'")
+    return value
+
+
+def parse_settings(config: configparser.ConfigParser) -> Settings:
+    """The [settings] of a config, defaults filled in. ValueError (naming the setting) if any is unusable."""
+    return Settings(**{key: _parse_setting(key, get_setting(config, key)) for key in SETTINGS_DEFAULTS})
+
+
+def save_settings(values: dict[str, str]) -> None:
+    """
+    Write these [settings] values (key -> text) to the config file, changing a key's own
+    line where it has one and adding it to the section where it doesn't. Everything else,
+    comments included, is left as it is. ValueError, with the file untouched, if a value
+    wouldn't read back.
+    """
+    for key, text in values.items():
+        if key not in SETTINGS_DEFAULTS:
+            raise ValueError(f"'{key}' is not a setting nestcal has")
+        _parse_setting(key, text)
+
+    def rewrite(body: list[str]) -> list[str]:
+        for key, text in values.items():
+            own_line = re.compile(rf"\s*{re.escape(key)}\s*[=:]")
+            index = next((i for i, l in enumerate(body) if own_line.match(l) and _is_calendar_entry(l)), None)
+            if index is not None:
+                body[index] = f"{key} = {text.strip()}\n"
+            else:
+                position = _after_last_content(body)
+                body = _with_newline_at(body, position)
+                body[position:position] = [f"{key} = {text.strip()}\n"]
+        return body
+    _rewrite_section("settings", rewrite)
+
+
+@dataclass
+class FeedCheck:
+    ok: bool
+    message: str
+
+
+def check_feed(url: str) -> FeedCheck:
+    """Fetch and parse a calendar link once, so the user learns now, in plain words,
+    whether it will work, rather than when a reminder silently never comes."""
+    try:
+        resp = requests.get(normalise_ics_url(url), headers={"User-Agent": USER_AGENT},
+                            timeout=HTTP_TIMEOUT)
+    except requests.RequestException as e:
+        return FeedCheck(False, f"Couldn't reach that link: {e}")
+    if resp.status_code != 200:
+        return FeedCheck(False, f"The server answered {resp.status_code} instead of a calendar. "
+                                f"Is the link complete and still valid?")
+    try:
+        events = list(icalendar.Calendar.from_ical(resp.content).walk("VEVENT"))
+    except Exception:
+        return FeedCheck(False, "That link works, but it isn't a calendar (.ics) file.")
+    return FeedCheck(True, f"Looks good: {len(events)} event{'' if len(events) == 1 else 's'} found")
 
 
 def get_setting(config: configparser.ConfigParser, key: str) -> str:
@@ -419,6 +607,47 @@ def format_time_range(occ: Occurrence) -> str:
         return f"{start} \u2013 {occ.end_local.strftime('%H:%M')}"
     return (f"{occ.start_local.strftime('%a %d %b %H:%M')} \u2013 "
             f"{occ.end_local.strftime('%a %d %b %H:%M')}")
+
+
+def _day_name(day: date, today: date) -> str:
+    if day == today:
+        return "Today"
+    if day == today + timedelta(days=1):
+        return "Tomorrow"
+    return day.strftime("%a %d %b")
+
+
+def format_when(occ: Occurrence, now: datetime) -> str:
+    """For a grid: 'Today 14:00 \u2013 15:00', 'Tomorrow (all day)', 'Mon 16 Nov 09:00 \u2013 10:00'."""
+    today = now.astimezone(occ.start_local.tzinfo).date()
+    first_day = _day_name(occ.start_local.date(), today)
+    if occ.all_day:
+        last = occ.end_local.date() - timedelta(days=1)  # an all-day event's end is the day after
+        span = first_day if last <= occ.start_local.date() else f"{first_day} \u2013 {_day_name(last, today)}"
+        return f"{span} (all day)"
+    start = occ.start_local.strftime("%H:%M")
+    end = occ.end_local.strftime("%H:%M")
+    if occ.start_local.date() == occ.end_local.date():
+        text = f"{first_day} {start} \u2013 {end}"
+    else:
+        text = f"{first_day} {start} \u2013 {_day_name(occ.end_local.date(), today)} {end}"
+    if occ.start_local <= now < occ.end_local:
+        text += " (in progress)"
+    return text
+
+
+def format_when_long(occ: Occurrence) -> str:
+    """For a details view: 'Friday 13 November 2026, 14:00 \u2013 15:00'."""
+    day = "%A %d %B %Y"
+    if occ.all_day:
+        last = occ.end_local - timedelta(days=1)
+        if last.date() <= occ.start_local.date():
+            return f"{occ.start_local.strftime(day)} (all day)"
+        return f"{occ.start_local.strftime(day)} \u2013 {last.strftime(day)} (all day)"
+    if occ.start_local.date() == occ.end_local.date():
+        return f"{occ.start_local.strftime(day)}, {occ.start_local:%H:%M} \u2013 {occ.end_local:%H:%M}"
+    return (f"{occ.start_local.strftime(day)}, {occ.start_local:%H:%M} \u2013 "
+            f"{occ.end_local.strftime(day)}, {occ.end_local:%H:%M}")
 
 
 def format_countdown(occ: Occurrence, now: datetime) -> str:
