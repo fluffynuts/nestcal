@@ -2,7 +2,7 @@
 """
 nestcal_tray - a system-tray meeting reminder for ICS calendar feeds.
 
-Polls the configured ICS feeds (see nestcal_core / ~/.config/nestcal.ini) and,
+Polls the configured ICS feeds (see nestcal_core / ~/.config/nestcal/config.ini) and,
 a configurable lead time before each meeting starts, pops a bespoke window that
 stays on top and does NOT auto-dismiss (unlike a system notification). The
 window shows the title, the start-end time range, and the meeting link
@@ -14,55 +14,51 @@ window class "nestcal" (or title prefix "Meeting:") -> Keep above: Force, Yes.
 On X11 the hint is honoured directly.
 """
 
+import configparser
 import os
 import sys
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
-# --- Qt import with PyQt6 -> PyQt5 fallback (mirrors Nestray) ---
-
-try:
-    from PyQt6.QtWidgets import (
-        QApplication, QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
-        QSystemTrayIcon, QMenu, QMessageBox, QDialog, QLineEdit,
-    )
-    from PyQt6.QtCore import Qt, QThread, QObject, pyqtSignal, QTimer, QUrl
-    from PyQt6.QtGui import QIcon, QAction, QDesktopServices, QPixmap, QPainter, QColor, QFont
-    PYQT = 6
-except ImportError:
-    from PyQt5.QtWidgets import (
-        QApplication, QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
-        QSystemTrayIcon, QMenu, QAction, QMessageBox, QDialog, QLineEdit,
-    )
-    from PyQt5.QtCore import Qt, QThread, QObject, pyqtSignal, QTimer, QUrl
-    from PyQt5.QtGui import QIcon, QDesktopServices, QPixmap, QPainter, QColor, QFont
-    PYQT = 5
-
+from nestcal_qt import (
+    PYQT, QAction, QApplication, QColor, QDesktopServices, QFont, QHBoxLayout, QIcon, QLabel,
+    QMenu, QMessageBox, QObject, QPainter, QPixmap, QPushButton, QSystemTrayIcon, QThread,
+    QTimer, QUrl, QVBoxLayout, QWidget, Qt, pyqtSignal,
+)
+import nestcal_core
+from nestcal_calendar_dialog import SetupDialog
+from nestcal_config_watch import ConfigWatcher
 from nestcal_core import (
-    Logger, load_config, get_feeds, add_calendar, validate_calendar, get_setting, collect_upcoming,
+    Logger, load_config, migrate_legacy_config, read_config, get_feeds, parse_settings, Settings, collect_upcoming,
     is_due_or_running, prune_seen, format_time_range,
     format_countdown, Occurrence,
 )
-from nestcal_update import RELEASES_URL, fetch_latest_version, is_newer, parse_version
+from nestcal_update import (
+    RELEASES_URL, fetch_latest_version, is_newer, load_state, parse_version, record_prompt,
+    save_state, should_prompt,
+)
 from nestcal_version import VERSION
+from nestcal_window import MainWindow
 
 # Keep notified-keys for events whose start is within the last day; older ones
 # can't reappear in the window or still be running, so they're safe to forget.
 SEEN_RETENTION_SECONDS = 24 * 60 * 60
+UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000
 
 # --- Enum compatibility (scoped in PyQt6, flat in PyQt5) ---
 
 if PYQT == 6:
     STAY_ON_TOP = Qt.WindowType.WindowStaysOnTopHint
     TEXT_BROWSER = Qt.TextInteractionFlag.TextBrowserInteraction
-    TRAY_TRIGGER = QSystemTrayIcon.ActivationReason.Trigger
+    TRAY_CLICKS = (QSystemTrayIcon.ActivationReason.Trigger,
+                   QSystemTrayIcon.ActivationReason.DoubleClick)
     WA_DELETE_ON_CLOSE = Qt.WidgetAttribute.WA_DeleteOnClose
     ACCEPT_ROLE = QMessageBox.ButtonRole.AcceptRole
     REJECT_ROLE = QMessageBox.ButtonRole.RejectRole
 else:
     STAY_ON_TOP = Qt.WindowStaysOnTopHint
     TEXT_BROWSER = Qt.TextBrowserInteraction
-    TRAY_TRIGGER = QSystemTrayIcon.Trigger
+    TRAY_CLICKS = (QSystemTrayIcon.Trigger, QSystemTrayIcon.DoubleClick)
     WA_DELETE_ON_CLOSE = Qt.WA_DeleteOnClose
     ACCEPT_ROLE = QMessageBox.AcceptRole
     REJECT_ROLE = QMessageBox.RejectRole
@@ -133,6 +129,17 @@ class CalendarPoller(QThread):
 
     def poll_now(self) -> None:
         self._wake.set()
+
+    def set_timing(self, window_hours: float, poll_interval: int) -> None:
+        """Change how far ahead and how often to fetch, and fetch right away so it shows."""
+        self.window_hours = window_hours
+        self.poll_interval = poll_interval
+        self.poll_now()
+
+    def set_feeds(self, feeds) -> None:
+        """Swap the calendars watched and poll them right away."""
+        self.feeds = feeds  # one reference assignment: run() sees the old list or the new, never a mix
+        self.poll_now()
 
     def stop(self) -> None:
         self._stopping = True
@@ -287,11 +294,7 @@ class TrayApp:
         self.app = app
         self.logger = logger
 
-        self.lead = timedelta(minutes=float(get_setting(config, "lead_minutes")))
-        self.window_hours = float(get_setting(config, "window_hours"))
-        self.snooze_minutes = int(get_setting(config, "snooze_minutes"))
-        check_interval = int(get_setting(config, "check_interval"))
-        poll_interval = int(get_setting(config, "poll_interval"))
+        self.settings = parse_settings(config)
         self.feeds = get_feeds(config, logger)
 
         self.events: list[Occurrence] = []
@@ -301,6 +304,10 @@ class TrayApp:
         self.icon = make_icon()  # one calendar icon, shared by tray and windows
         self.tray = QSystemTrayIcon(self.icon, app)
         self.tray.setToolTip("nestcal")
+        self.main_window = MainWindow(self.icon)
+        self.main_window.calendars_tab.set_calendars([(f.label, f.url) for f in self.feeds])
+        # macOS shows the menu on any click, so the menu's "Open nestcal" is the way in there.
+        self.tray.activated.connect(self._on_tray_activated)
         # Menu is rebuilt each time it's opened so the list of in-progress
         # meetings at the top is always current.
         self.menu = QMenu()
@@ -309,18 +316,37 @@ class TrayApp:
         self.tray.setContextMenu(self.menu)
         self.tray.show()
 
-        self.poller = CalendarPoller(self.feeds, self.window_hours, poll_interval, logger)
+        self.poller = CalendarPoller(
+            self.feeds, self.settings.window_hours, self.settings.poll_interval, logger)
         self.poller.events_updated.connect(self.on_events)
         self.poller.start()
 
+        self.config_watcher = ConfigWatcher(nestcal_core.CONFIG_PATH, logger=logger)
+        self.config_watcher.changed.connect(self.on_config_changed)
+
         self.update_dialog = None
         self.update_checker = UpdateChecker(logger)
-        self.update_checker.update_available.connect(self.show_update_dialog)
-        self.update_checker.start()
+        self.update_checker.update_available.connect(self.on_update_available)
+        # A long-running app: ask again now and then, not only at startup.
+        self.update_timer = QTimer()
+        self.update_timer.timeout.connect(self.update_checker.start)
+        self.clock = lambda: datetime.now(timezone.utc)
+        if self.settings.check_for_updates:
+            self._start_checking_for_updates()
 
         self.timer = QTimer()
         self.timer.timeout.connect(self.check_due)
-        self.timer.start(max(1, check_interval) * 1000)
+        self.timer.start(self.settings.check_interval * 1000)
+        self.main_window.preferences_tab.set_settings(self.settings)
+        self.main_window.events_tab.set_window_hours(self.settings.window_hours)
+
+    @property
+    def lead(self) -> timedelta:
+        return timedelta(minutes=self.settings.lead_minutes)
+
+    @property
+    def snooze_minutes(self) -> int:
+        return self.settings.snooze_minutes
 
     def _rebuild_menu(self) -> None:
         """Repopulate the tray menu: meetings in progress OR within their lead
@@ -329,6 +355,9 @@ class TrayApp:
         so it's always current — this is the recovery path for a pop-up you
         dismissed early or missed."""
         self.menu.clear()
+        open_action = self.menu.addAction("Open nestcal")
+        open_action.triggered.connect(self.show_main_window)
+        self.menu.addSeparator()
         local_tz = datetime.now().astimezone().tzinfo
         now = datetime.now(tz=local_tz)
 
@@ -346,8 +375,67 @@ class TrayApp:
         quit_action = self.menu.addAction("Quit")
         quit_action.triggered.connect(self.quit)
 
+    def on_config_changed(self) -> None:
+        """The config file changed on disk, by the UI or by hand. A file that can't be
+        read leaves the app on the last good settings, and says so in the window."""
+        try:
+            config = read_config()
+            settings = parse_settings(config)
+        except (OSError, configparser.Error, ValueError) as e:
+            self.logger.log(f"config not applied: {e}")
+            self.main_window.show_config_problem(
+                f"The config file couldn't be applied, so nestcal is still using the "
+                f"settings from before the change: {e}")
+            return
+        self.main_window.show_config_problem(None)
+        self.apply_settings(settings)
+        feeds = get_feeds(config, self.logger)
+        if [(f.label, f.url) for f in feeds] != [(f.label, f.url) for f in self.feeds]:
+            self.feeds = feeds
+            self.poller.set_feeds(feeds)
+            self.main_window.calendars_tab.set_calendars([(f.label, f.url) for f in feeds])
+
+    def apply_settings(self, settings: Settings) -> None:
+        old = self.settings
+        if settings == old:
+            return
+        self.settings = settings
+        if settings.check_interval != old.check_interval:
+            self.timer.start(settings.check_interval * 1000)
+        if (settings.window_hours, settings.poll_interval) != (old.window_hours, old.poll_interval):
+            self.poller.set_timing(settings.window_hours, settings.poll_interval)
+        if settings.check_for_updates and not old.check_for_updates:
+            self._start_checking_for_updates()
+        if old.check_for_updates and not settings.check_for_updates:
+            self.update_timer.stop()
+            self.main_window.events_tab.show_update(None)
+        self.main_window.preferences_tab.set_settings(settings)
+        self.main_window.events_tab.set_window_hours(settings.window_hours)
+
+    def _start_checking_for_updates(self) -> None:
+        self.update_checker.start()
+        self.update_timer.start(UPDATE_CHECK_INTERVAL_MS)
+
+    def on_update_available(self, latest: str) -> None:
+        """The link in the window is always there; the pop-up dialog is rationed, because a
+        busy user who dismisses it hasn't necessarily decided against updating."""
+        self.main_window.events_tab.show_update(latest)
+        now = self.clock()
+        state = load_state(self.logger)
+        if should_prompt(state, latest, now):
+            save_state(record_prompt(state, latest, now), self.logger)
+            self.show_update_dialog(latest)
+
+    def _on_tray_activated(self, reason) -> None:
+        if reason in TRAY_CLICKS:
+            self.show_main_window()
+
+    def show_main_window(self) -> None:
+        self.main_window.present()
+
     def on_events(self, occurrences: list) -> None:
         self.events = occurrences
+        self.main_window.events_tab.set_events(occurrences)
         self.seen = prune_seen(self.seen, SEEN_RETENTION_SECONDS)  # keep it bounded
         upcoming = [o for o in occurrences if not o.all_day]
         if upcoming:
@@ -416,72 +504,26 @@ class TrayApp:
 
     def quit(self) -> None:
         self.logger.log("shutting down")
+        self.main_window.close()
         self.poller.stop()
         self.poller.wait(2000)
         self.app.quit()
 
 
-class SetupDialog(QDialog):
-    """First-run prompt for a calendar's name and .ics link."""
-
-    def __init__(self, icon: QIcon):
-        super().__init__()
-        self.setWindowTitle("nestcal setup")
-        self.setWindowIcon(icon)
-        self.setMinimumWidth(480)
-
-        self.name_edit = QLineEdit()
-        self.name_edit.setPlaceholderText("for example: work")
-        self.url_edit = QLineEdit()
-        self.url_edit.setPlaceholderText("https://calendar.google.com/calendar/ical/.../basic.ics")
-        self.error_label = QLabel()
-        self.error_label.setStyleSheet("color: #c0392b;")
-        self.error_label.setWordWrap(True)
-
-        intro = QLabel("nestcal reminds you before meetings start. To begin, tell it about "
-                       "one calendar. You can add more later in ~/.config/nestcal.ini.")
-        intro.setWordWrap(True)
-        help_link = QLabel(
-            '<a href="https://support.google.com/calendar/answer/37648">'
-            'How do I find my calendar\'s .ics link?</a>')
-        help_link.setOpenExternalLinks(True)
-
-        self.save_button = QPushButton("Save")
-        self.save_button.setDefault(True)
-        self.save_button.clicked.connect(self._save)
-        cancel_button = QPushButton("Cancel")
-        cancel_button.clicked.connect(self.reject)
-        buttons = QHBoxLayout()
-        buttons.addStretch(1)
-        buttons.addWidget(cancel_button)
-        buttons.addWidget(self.save_button)
-
-        layout = QVBoxLayout(self)
-        layout.addWidget(intro)
-        layout.addWidget(QLabel("Calendar name"))
-        layout.addWidget(self.name_edit)
-        layout.addWidget(QLabel("Calendar .ics link (keep this private)"))
-        layout.addWidget(self.url_edit)
-        layout.addWidget(help_link)
-        layout.addWidget(self.error_label)
-        layout.addLayout(buttons)
-
-    def _save(self) -> None:
-        problem = validate_calendar(self.name_edit.text(), self.url_edit.text())
-        if problem:
-            self.error_label.setText(problem)
-            return
-        try:
-            add_calendar(self.name_edit.text(), self.url_edit.text())
-        except OSError as e:
-            self.error_label.setText(f"Couldn't save the settings: {e}")
-            return
-        self.accept()
-
-
 def main() -> None:
     logger = Logger("--debug" in sys.argv)
+    try:
+        migrate_legacy_config(logger)
+    except OSError as e:
+        print(f"nestcal: can't move your config from {nestcal_core.LEGACY_CONFIG_PATH} to "
+              f"{nestcal_core.CONFIG_PATH}: {e}. Move it there by hand and start again.", file=sys.stderr)
+        sys.exit(1)
     config = load_config(logger)
+    try:
+        parse_settings(config)
+    except ValueError as e:
+        print(f"nestcal: can't start: {e} (in ~/.config/nestcal/config.ini)", file=sys.stderr)
+        sys.exit(1)
 
     app = QApplication(sys.argv)
     app.setApplicationName("nestcal")
@@ -497,7 +539,7 @@ def main() -> None:
             feeds = get_feeds(config, logger)
     if not feeds:
         print(f"nestcal: no feeds configured; add calendars under [calendars] "
-              f"in ~/.config/nestcal.ini", file=sys.stderr)
+              f"in ~/.config/nestcal/config.ini", file=sys.stderr)
         sys.exit(1)
 
     TrayApp(app, config, logger)

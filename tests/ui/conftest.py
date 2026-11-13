@@ -1,8 +1,11 @@
 import configparser
 
 import pytest
+from pytestqt.exceptions import TimeoutError as QtTimeoutError
 
+import nestcal_core
 import nestcal_tray
+import nestcal_update
 from feed_server import FeedServer
 from nestcal_core import Logger
 
@@ -36,6 +39,27 @@ class RunningApp:
         """Wait until the app has fully processed `count` feed polls in total."""
         self._qtbot.waitUntil(lambda: len(self._polls) >= count, timeout=10_000)
 
+    def explain(self) -> str:
+        """Why a change that was expected to reach the app might not have: did the save fail, did
+        the file change, did the watcher notice, did the app refuse it?"""
+        tray = self.tray_app
+        watcher = tray.config_watcher
+        try:
+            text = nestcal_core.CONFIG_PATH.read_text()
+        except OSError as e:
+            text = f"<unreadable: {e}>"
+        return (f"save error shown in Preferences: {tray.main_window.preferences_tab.error_label.text()!r}; "
+                f"banner in the window: {tray.main_window.problem_label.text()!r}; "
+                f"watcher last announced {watcher._seen[:8]}, file is now {watcher._fingerprint()[:8]}; "
+                f"file: {text!r}")
+
+    def wait_until(self, condition, timeout: int = 10_000) -> None:
+        """Wait for the app to apply a change to its config, saying why not if it never does."""
+        try:
+            self._qtbot.waitUntil(condition, timeout=timeout)
+        except QtTimeoutError as e:
+            raise AssertionError(f"the app did not apply the change in {timeout} ms. {self.explain()}") from e
+
     @property
     def windows(self) -> dict:
         return self.tray_app.windows
@@ -43,6 +67,10 @@ class RunningApp:
     @property
     def tooltip(self) -> str:
         return self.tray_app.tray.toolTip()
+
+    @property
+    def config_path(self):
+        return nestcal_core.CONFIG_PATH
 
     def open_menu(self):
         """What happens when the user clicks the tray icon."""
@@ -54,10 +82,13 @@ class RunningApp:
 
 
 @pytest.fixture
-def start_app(qapp, qtbot, feed_server, monkeypatch):
+def start_app(qapp, qtbot, feed_server, monkeypatch, tmp_path):
     """Starts the real TrayApp against the fake feed and waits for nothing: tests
     call wait_for_polls themselves. Cleans up the poller thread and windows."""
     monkeypatch.setattr(nestcal_tray, "VERSION", "dev")  # never reach out to GitHub
+    config_path = tmp_path / "nestcal.ini"
+    monkeypatch.setattr(nestcal_core, "CONFIG_PATH", config_path)  # never watch the real one
+    monkeypatch.setattr(nestcal_update, "STATE_PATH", tmp_path / "nestcal.state.json")
     polls = []
     original_on_events = nestcal_tray.TrayApp.on_events
 
@@ -74,6 +105,8 @@ def start_app(qapp, qtbot, feed_server, monkeypatch):
                               "snooze_minutes": "1", "check_interval": "1",
                               **{k: str(v) for k, v in settings.items()}}
         config["calendars"] = {"work": feed_server.url}
+        with open(config_path, "w") as f:
+            config.write(f)
         tray_app = nestcal_tray.TrayApp(qapp, config, Logger(False))
         started.append(tray_app)
         return RunningApp(tray_app, polls, qtbot)
@@ -82,6 +115,9 @@ def start_app(qapp, qtbot, feed_server, monkeypatch):
 
     for tray_app in started:
         tray_app.timer.stop()
+        tray_app.config_watcher._settle.stop()
+        tray_app.config_watcher._poll.stop()
+        tray_app.update_timer.stop()
         tray_app.poller.stop()
         tray_app.poller.wait(5000)
         # The poller may have queued a final result; deliver it while the app is still
@@ -96,3 +132,35 @@ def start_app(qapp, qtbot, feed_server, monkeypatch):
                 pass  # a button already closed it, and it deletes itself on close
         tray_app.tray.hide()
         qapp.processEvents()
+
+
+@pytest.fixture
+def form_hostile_style(qapp):
+    """A widget style like some desktop themes': forms keep their value column at its smallest
+    size and right-align their field names. Qt's own styles don't do this, so a layout that
+    leans on the default would pass here and break on such a desktop."""
+    from nestcal_qt import PYQT, QFormLayout, QProxyStyle, QStyle, Qt
+    if PYQT == 6:
+        growth_hint = QStyle.StyleHint.SH_FormLayoutFieldGrowthPolicy
+        alignment_hint = QStyle.StyleHint.SH_FormLayoutLabelAlignment
+        stay_at_hint = QFormLayout.FieldGrowthPolicy.FieldsStayAtSizeHint.value
+        right = Qt.AlignmentFlag.AlignRight.value
+    else:
+        growth_hint = QStyle.SH_FormLayoutFieldGrowthPolicy
+        alignment_hint = QStyle.SH_FormLayoutLabelAlignment
+        stay_at_hint = int(QFormLayout.FieldsStayAtSizeHint)
+        right = int(Qt.AlignRight)
+
+    class Hostile(QProxyStyle):
+        def styleHint(self, hint, option=None, widget=None, returnData=None):
+            if hint == growth_hint:
+                return stay_at_hint
+            if hint == alignment_hint:
+                return right
+            return super().styleHint(hint, option, widget, returnData)
+
+    original = qapp.style().objectName()
+    hostile = Hostile(original)
+    qapp.setStyle(hostile)
+    yield
+    qapp.setStyle(original)
