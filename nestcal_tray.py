@@ -321,7 +321,7 @@ class TrayApp:
         self.poller.events_updated.connect(self.on_events)
         self.poller.start()
 
-        self.config_watcher = ConfigWatcher(nestcal_core.CONFIG_PATH)
+        self.config_watcher = ConfigWatcher(nestcal_core.CONFIG_PATH, logger=logger)
         self.config_watcher.changed.connect(self.on_config_changed)
 
         self.update_dialog = None

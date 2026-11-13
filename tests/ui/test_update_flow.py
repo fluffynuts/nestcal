@@ -90,7 +90,7 @@ def test_checking_repeats_daily_while_enabled(start_app, monkeypatch):
     assert started == [True, True]  # at startup, and the timer
 
 
-def test_turning_update_checks_off_stops_the_timer_and_hides_the_link(qtbot, start_app, monkeypatch):
+def test_turning_update_checks_off_stops_the_timer_and_hides_the_link(start_app, monkeypatch):
     monkeypatch.setattr(nestcal_tray.UpdateChecker, "start", lambda self: None)
     monkeypatch.setattr(nestcal_tray.TrayApp, "show_update_dialog", lambda self, latest: None)
     app = start_app()
@@ -109,7 +109,7 @@ def test_turning_update_checks_off_stops_the_timer_and_hides_the_link(qtbot, sta
         assert not app.tray_app.update_timer.isActive(), (
             "the file was saved but the app did not apply it; "
             f"window banner: {app.tray_app.main_window.problem_label.text()!r}")
-    qtbot.waitUntil(timer_stopped, timeout=10_000)
+    app.wait_until(timer_stopped)
     assert app.tray_app.main_window.events_tab.update_label.isHidden()
 
 
@@ -137,7 +137,7 @@ def test_remembering_an_update_prompt_does_not_make_the_app_reread_its_config(qt
     monkeypatch.setattr(nestcal_tray.TrayApp, "on_config_changed", lambda self: reread.append(True))
     app, shown = start_with_clock(start_app, monkeypatch)
 
-    with qtbot.waitSignal(app.tray_app.config_watcher._settle.timeout, timeout=10_000):
+    with qtbot.waitSignal(app.tray_app.config_watcher._settle.timeout):
         app.tray_app.on_update_available("v0.9.0")
 
     assert nestcal_update.STATE_PATH.exists()

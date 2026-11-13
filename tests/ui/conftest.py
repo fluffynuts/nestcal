@@ -1,6 +1,7 @@
 import configparser
 
 import pytest
+from pytestqt.exceptions import TimeoutError as QtTimeoutError
 
 import nestcal_core
 import nestcal_tray
@@ -37,6 +38,27 @@ class RunningApp:
     def wait_for_polls(self, count: int) -> None:
         """Wait until the app has fully processed `count` feed polls in total."""
         self._qtbot.waitUntil(lambda: len(self._polls) >= count, timeout=10_000)
+
+    def explain(self) -> str:
+        """Why a change that was expected to reach the app might not have: did the save fail, did
+        the file change, did the watcher notice, did the app refuse it?"""
+        tray = self.tray_app
+        watcher = tray.config_watcher
+        try:
+            text = nestcal_core.CONFIG_PATH.read_text()
+        except OSError as e:
+            text = f"<unreadable: {e}>"
+        return (f"save error shown in Preferences: {tray.main_window.preferences_tab.error_label.text()!r}; "
+                f"banner in the window: {tray.main_window.problem_label.text()!r}; "
+                f"watcher last announced {watcher._seen[:8]}, file is now {watcher._fingerprint()[:8]}; "
+                f"file: {text!r}")
+
+    def wait_until(self, condition, timeout: int = 10_000) -> None:
+        """Wait for the app to apply a change to its config, saying why not if it never does."""
+        try:
+            self._qtbot.waitUntil(condition, timeout=timeout)
+        except QtTimeoutError as e:
+            raise AssertionError(f"the app did not apply the change in {timeout} ms. {self.explain()}") from e
 
     @property
     def windows(self) -> dict:
@@ -94,6 +116,7 @@ def start_app(qapp, qtbot, feed_server, monkeypatch, tmp_path):
     for tray_app in started:
         tray_app.timer.stop()
         tray_app.config_watcher._settle.stop()
+        tray_app.config_watcher._poll.stop()
         tray_app.update_timer.stop()
         tray_app.poller.stop()
         tray_app.poller.wait(5000)

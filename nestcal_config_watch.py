@@ -3,9 +3,11 @@
 import hashlib
 from pathlib import Path
 
+from nestcal_core import Logger
 from nestcal_qt import QFileSystemWatcher, QObject, QTimer, pyqtSignal
 
 SETTLE_MS = 300
+POLL_MS = 2000
 
 
 class ConfigWatcher(QObject):
@@ -15,12 +17,17 @@ class ConfigWatcher(QObject):
 
     Watching the folder means hearing about every write to it: other programs' files, nestcal's
     own state file, a save that rewrites identical content. So `changed` is only emitted when
-    what's in the config file differs from what was last announced."""
+    what's in the config file differs from what was last announced.
+
+    QFileSystemWatcher is best-effort (and least dependable on Windows), so the file is also
+    checked every few seconds: a change the OS never reported is still applied, only later."""
 
     changed = pyqtSignal()
 
-    def __init__(self, path: Path, settle_ms: int = SETTLE_MS):
+    def __init__(self, path: Path, settle_ms: int = SETTLE_MS, poll_ms: int = POLL_MS,
+                 logger: Logger | None = None):
         super().__init__()
+        self._logger = logger or Logger(False)
         self._path = path.resolve()
         self._watcher = QFileSystemWatcher()
         self._watcher.fileChanged.connect(self._on_event)
@@ -30,6 +37,10 @@ class ConfigWatcher(QObject):
         self._settle.setInterval(settle_ms)
         self._settle.timeout.connect(self._announce_if_changed)
         self._seen = self._fingerprint()
+        self._poll = QTimer()
+        self._poll.setInterval(poll_ms)
+        self._poll.timeout.connect(self._poll_for_change)
+        self._poll.start()
         self._watch()
 
     def _fingerprint(self) -> str:
@@ -41,11 +52,17 @@ class ConfigWatcher(QObject):
         except OSError:
             return "unreadable"
 
-    def _announce_if_changed(self) -> None:
+    def _announce_if_changed(self) -> bool:
         now = self._fingerprint()
-        if now != self._seen:
-            self._seen = now
-            self.changed.emit()
+        if now == self._seen:
+            return False
+        self._seen = now
+        self.changed.emit()
+        return True
+
+    def _poll_for_change(self) -> None:
+        if self._announce_if_changed():
+            self._logger.log("config change found by polling: the file watcher did not report it")
 
     def _watch(self) -> None:
         for candidate in (self._path.parent, self._path):

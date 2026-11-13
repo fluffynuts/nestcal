@@ -7,12 +7,12 @@ from nestcal_config_watch import ConfigWatcher
 
 
 class Watched:
-    def __init__(self, qtbot, folder):
+    def __init__(self, qtbot, folder, poll_ms=600_000):
         self.qtbot = qtbot
         self.folder = folder
         self.ini = folder / "config.ini"
         self.ini.write_text("[settings]\nlead_minutes = 2\n")
-        self.watcher = ConfigWatcher(self.ini, settle_ms=20)
+        self.watcher = ConfigWatcher(self.ini, settle_ms=20, poll_ms=poll_ms)  # polling off unless asked for
         self.announced = []
         self.watcher.changed.connect(lambda: self.announced.append(
             self.ini.read_text() if self.ini.exists() else None))
@@ -83,3 +83,40 @@ def test_a_deleted_file_is_announced_and_so_is_its_return(watched):
     watched.settle_after(lambda: watched.ini.write_text("[settings]\nlead_minutes = 9\n"))
 
     assert watched.announced == [None, "[settings]\nlead_minutes = 9\n"]
+
+
+# --- the safety net: QFileSystemWatcher is best-effort, so the file is also checked on a timer ---
+
+def test_a_change_the_os_never_reported_is_still_found_by_polling(qtbot, tmp_path):
+    watched = Watched(qtbot, tmp_path, poll_ms=30)
+    watched.watcher._watcher.blockSignals(True)  # as if the OS had not told us
+
+    with qtbot.waitSignal(watched.watcher.changed, timeout=10_000):
+        watched.ini.write_text("[settings]\nlead_minutes = 5\n")
+
+    assert watched.announced == ["[settings]\nlead_minutes = 5\n"]
+
+
+def test_polling_announces_nothing_when_nothing_changed(qtbot, tmp_path):
+    watched = Watched(qtbot, tmp_path, poll_ms=30)
+    watched.watcher._watcher.blockSignals(True)
+
+    for _ in range(3):  # three whole polls of an untouched file
+        with qtbot.waitSignal(watched.watcher._poll.timeout, timeout=10_000):
+            pass
+
+    assert watched.announced == []
+
+
+def test_a_change_found_only_by_polling_is_logged_so_a_debug_run_shows_the_watcher_missed_it(
+        qtbot, tmp_path, capsys):
+    from nestcal_core import Logger
+    ini = tmp_path / "config.ini"
+    ini.write_text("[settings]\n")
+    watcher = ConfigWatcher(ini, settle_ms=20, poll_ms=30, logger=Logger(True))
+    watcher._watcher.blockSignals(True)
+
+    with qtbot.waitSignal(watcher.changed, timeout=10_000):
+        ini.write_text("[settings]\nlead_minutes = 5\n")
+
+    assert "found by polling" in capsys.readouterr().err
