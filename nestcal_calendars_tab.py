@@ -57,28 +57,44 @@ class CalendarsTab(QWidget):
         self._update_buttons()
 
     def add_calendar(self) -> None:
-        self._run_dialog("Add calendar", None, lambda name, url: self.calendars + [(name, url)])
+        self._run_dialog("Add calendar", None, lambda current, name, url: current + [(name, url)])
 
     def edit_calendar(self, row: int | None) -> None:
         if row is None or row >= len(self.calendars):
             return
 
-        def replaced(name: str, url: str) -> list[tuple[str, str]]:
-            changed = list(self.calendars)
-            changed[row] = (name, url)
+        def replaced(current: list[tuple[str, str]], name: str, url: str) -> list[tuple[str, str]]:
+            changed = list(current)
+            changed[self._position_of(current, chosen)] = (name, url)
             return changed
-        self._run_dialog("Edit calendar", row, replaced)
+        chosen = self.calendars[row]
+        self._run_dialog("Edit calendar", chosen, replaced)
 
     def remove_calendar(self, row: int | None) -> None:
         if row is None or row >= len(self.calendars):
             return
-        name = self.calendars[row][0]
-        if not self._confirm_remove(name):
+        chosen = self.calendars[row]
+        if not self._confirm_remove(chosen[0]):
             return
         try:
-            self._persist(self.calendars[:row] + self.calendars[row + 1:])
+            remaining = list(self.calendars)
+            del remaining[self._position_of(remaining, chosen)]
+            self._persist(remaining)
         except (OSError, ValueError) as e:
-            QMessageBox.warning(self, "nestcal", f"Couldn't save the settings: {e}")
+            self._show_error(f"Couldn't save the settings: {e}")
+
+    @staticmethod
+    def _position_of(calendars: list[tuple[str, str]], chosen: tuple[str, str]) -> int:
+        """Where `chosen` is now. The file may have been edited, and the grid refreshed, since
+        it was picked, so a row number from then could name a different calendar."""
+        try:
+            return calendars.index(chosen)
+        except ValueError:
+            raise ValueError(f"'{chosen[0]}' was changed or removed in the file in the meantime; "
+                             f"look at the list as it is now and try again") from None
+
+    def _show_error(self, text: str) -> None:
+        QMessageBox.warning(self, "nestcal", text)
 
     def _confirm_remove(self, name: str) -> bool:
         answer = QMessageBox.question(
@@ -86,12 +102,12 @@ class CalendarsTab(QWidget):
             YES | NO, NO)
         return answer == YES
 
-    def _run_dialog(self, title: str, row: int | None, apply) -> None:
-        name, url = self.calendars[row] if row is not None else ("", "")
-        others = [n for i, (n, _) in enumerate(self.calendars) if i != row]
+    def _run_dialog(self, title: str, chosen: tuple[str, str] | None, apply) -> None:
+        name, url = chosen if chosen is not None else ("", "")
+        others = [n for (n, u) in self.calendars if (n, u) != chosen]
         dialog = CalendarDialog(
             self._icon, title=title, name=name, url=url, other_names=others,
-            save=lambda new_name, new_url: self._persist(apply(new_name, new_url)))
+            save=lambda new_name, new_url: self._persist(apply(self.calendars, new_name, new_url)))
         dialog.exec()
 
     def _persist(self, calendars: list[tuple[str, str]]) -> None:

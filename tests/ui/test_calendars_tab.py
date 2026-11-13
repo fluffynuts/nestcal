@@ -245,3 +245,81 @@ def test_testing_against_a_real_feed(qtbot, feed_server):
     d.test_button.click()
 
     qtbot.waitUntil(lambda: d.check_label.text().startswith("Looks good: 1 event"), timeout=10_000)
+
+
+# --- the file changing while a dialog or confirmation is open ---
+
+def edit_while(monkeypatch, external, name, url):
+    """The user edits in the dialog; before Save, the file is changed elsewhere and the tab is told."""
+    def fake_exec(self):
+        external()
+        self.name_edit.setText(name)
+        self.url_edit.setText(url)
+        self.save_button.click()
+        return self.result()
+    monkeypatch.setattr(nestcal_calendar_dialog.CalendarDialog, "exec", fake_exec)
+
+
+def test_an_edit_changes_the_calendar_that_was_being_edited_even_if_rows_were_removed_meanwhile(
+        tab, monkeypatch):
+    edit_while(monkeypatch, lambda: tab.set_calendars([("home", B)]), "office", C)  # "work" was deleted
+
+    tab.edit_calendar(1)  # editing "home"
+
+    assert grid(tab) == [("office", C)]
+    assert file_calendars() == [("office", C)]
+
+
+def test_an_edit_changes_the_calendar_that_was_being_edited_even_if_rows_were_added_above(tab, monkeypatch):
+    edit_while(monkeypatch, lambda: tab.set_calendars([("new", C), ("work", A), ("home", B)]), "office", C)
+
+    tab.edit_calendar(0)  # editing "work"
+
+    assert grid(tab) == [("new", C), ("office", C), ("home", B)]
+
+
+def test_an_edit_of_a_calendar_that_was_changed_elsewhere_is_refused_and_nothing_is_overwritten(
+        tab, monkeypatch, config_path):
+    shown = []
+
+    def fake_exec(self):
+        tab.set_calendars([("work", C), ("home", B)])  # "work" now has a different link
+        self.name_edit.setText("office")
+        self.save_button.click()
+        shown.append(self.error_label.text())
+        return self.result()
+    monkeypatch.setattr(nestcal_calendar_dialog.CalendarDialog, "exec", fake_exec)
+    before = config_path.read_text()
+
+    tab.edit_calendar(0)
+
+    assert "changed" in shown[0] and "removed" in shown[0]
+    assert grid(tab) == [("work", C), ("home", B)]
+    assert config_path.read_text() == before
+
+
+def test_a_removal_removes_the_calendar_that_was_chosen_even_if_rows_were_added_above(tab, monkeypatch):
+    def confirm(name):
+        tab.set_calendars([("new", C), ("work", A), ("home", B)])
+        return True
+    monkeypatch.setattr(tab, "_confirm_remove", confirm)
+
+    tab.remove_calendar(1)  # "home"
+
+    assert grid(tab) == [("new", C), ("work", A)]
+    assert file_calendars() == grid(tab)
+
+
+def test_removing_a_calendar_that_vanished_meanwhile_says_so_and_removes_nothing(tab, monkeypatch):
+    errors = []
+    monkeypatch.setattr(tab, "_show_error", errors.append)
+
+    def confirm(name):
+        tab.set_calendars([("work", A)])  # "home" was deleted in an editor
+        return True
+    monkeypatch.setattr(tab, "_confirm_remove", confirm)
+
+    tab.remove_calendar(1)
+
+    assert len(errors) == 1 and "home" in errors[0]
+    assert grid(tab) == [("work", A)]
