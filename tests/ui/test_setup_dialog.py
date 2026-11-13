@@ -87,3 +87,12 @@ def test_without_the_variable_main_offers_the_setup_dialog(run_main, monkeypatch
 
     assert run_main() == 1
     assert shown == [True]
+
+
+def test_main_refuses_to_start_on_an_unusable_setting_and_says_which(run_main, config_path, monkeypatch, capsys):
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text("[settings]\npoll_interval = lots\n[calendars]\nwork = https://example.com/a.ics\n")
+    monkeypatch.setattr(nestcal_tray, "TrayApp", lambda *a: pytest.fail("the app was started"))
+
+    assert run_main() == 1
+    assert "poll_interval must be a whole number, not 'lots'" in capsys.readouterr().err

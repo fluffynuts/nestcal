@@ -36,7 +36,7 @@ def test_menu_without_current_meetings_has_only_the_standard_actions(feed_server
     app = start_app()
     app.wait_for_polls(1)
 
-    assert app.menu_texts() == ["Poll now", "---", "Quit"]
+    assert app.menu_texts() == ["Open nestcal", "---", "Poll now", "---", "Quit"]
 
 
 def test_menu_lists_current_meetings_above_the_standard_actions(feed_server, start_app):
@@ -45,9 +45,9 @@ def test_menu_lists_current_meetings_above_the_standard_actions(feed_server, sta
     app.wait_for_polls(1)
 
     texts = app.menu_texts()
-    assert len(texts) == 5
-    assert texts[0].startswith("Standup ")
-    assert texts[1:] == ["---", "Poll now", "---", "Quit"]
+    assert texts[:2] == ["Open nestcal", "---"]
+    assert texts[2].startswith("Standup ")
+    assert texts[3:] == ["---", "Poll now", "---", "Quit"]
 
 
 def test_choosing_a_meeting_from_the_menu_reopens_a_dismissed_reminder(feed_server, start_app):
@@ -58,7 +58,7 @@ def test_choosing_a_meeting_from_the_menu_reopens_a_dismissed_reminder(feed_serv
     window.close()
     assert app.windows == {}
 
-    meeting_action = app.open_menu()[0]
+    meeting_action = app.open_menu()[2]
     meeting_action.trigger()
 
     [reopened] = app.windows.values()
@@ -73,7 +73,7 @@ def test_choosing_a_meeting_whose_reminder_is_open_raises_it_instead_of_opening_
     app.wait_for_polls(1)
     [original] = app.windows.values()
 
-    app.open_menu()[0].trigger()
+    app.open_menu()[2].trigger()
 
     on_screen = [w for w in qapp.topLevelWidgets()
                  if isinstance(w, nestcal_tray.ReminderWindow) and w.isVisible()]
