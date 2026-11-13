@@ -9,10 +9,10 @@ from pathlib import Path
 
 import requests
 
-from nestcal_core import HTTP_TIMEOUT, USER_AGENT, Logger
+from nestcal_core import CONFIG_DIR, HTTP_TIMEOUT, USER_AGENT, Logger
 
-# Not in nestcal.ini: that is the user's to edit, and writing here must not look like an edit.
-STATE_PATH = Path.home() / ".config" / "nestcal.state.json"
+# Not in config.ini: that is the user's to edit, and writing here must not look like an edit.
+STATE_PATH = CONFIG_DIR / "state.json"
 # After the first prompt about a release, wait this many days before the next, and so on;
 # after the last it is not prompted about again. Busy is not the same as uninterested,
 # so one dismissal isn't the end of it, but nobody is nagged for ever.

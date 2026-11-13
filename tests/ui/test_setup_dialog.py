@@ -9,7 +9,7 @@ URL = "https://example.com/a.ics"
 
 @pytest.fixture
 def config_path(tmp_path, monkeypatch):
-    path = tmp_path / ".config" / "nestcal.ini"
+    path = tmp_path / ".config" / "nestcal" / "config.ini"
     monkeypatch.setattr(nestcal_core, "CONFIG_PATH", path)
     return path
 
@@ -96,3 +96,32 @@ def test_main_refuses_to_start_on_an_unusable_setting_and_says_which(run_main, c
 
     assert run_main() == 1
     assert "poll_interval must be a whole number, not 'lots'" in capsys.readouterr().err
+
+
+@pytest.fixture
+def legacy_config_path(config_path, monkeypatch):
+    legacy = config_path.parent.parent / "nestcal.ini"  # ~/.config/nestcal.ini
+    monkeypatch.setattr(nestcal_core, "LEGACY_CONFIG_PATH", legacy)
+    return legacy
+
+
+def test_main_moves_an_old_config_before_it_reads_the_config(run_main, config_path, legacy_config_path,
+                                                             monkeypatch, capsys):
+    monkeypatch.setenv("NO_FIRST_TIME_SETUP", "1")
+    legacy_config_path.parent.mkdir(parents=True, exist_ok=True)
+    legacy_config_path.write_text("[calendars]\n")
+
+    assert run_main() == 1  # no calendars in it: the point is that it was found, and moved
+    assert config_path.read_text() == "[calendars]\n"
+    assert not legacy_config_path.exists()
+
+
+def test_main_refuses_to_start_and_says_so_if_the_old_config_cannot_be_moved(
+        run_main, config_path, legacy_config_path, monkeypatch, capsys):
+    def refuse(logger):
+        raise PermissionError("read-only folder")
+    monkeypatch.setattr(nestcal_tray, "migrate_legacy_config", refuse)
+
+    assert run_main() == 1
+    err = capsys.readouterr().err
+    assert "read-only folder" in err and "nestcal.ini" in err and "config.ini" in err

@@ -12,6 +12,7 @@ import configparser
 import contextlib
 import os
 import re
+import shutil
 import stat
 import sys
 import time
@@ -36,7 +37,10 @@ except ImportError as e:
 
 # --- Constants ---
 
-CONFIG_PATH = Path.home() / ".config" / "nestcal.ini"
+# A folder of nestcal's own, so that watching it hears only about nestcal's files.
+CONFIG_DIR = Path.home() / ".config" / "nestcal"
+CONFIG_PATH = CONFIG_DIR / "config.ini"
+LEGACY_CONFIG_PATH = Path.home() / ".config" / "nestcal.ini"  # where releases up to 0.1.x kept it
 HTTP_TIMEOUT = 20
 USER_AGENT = "nestcal/0.1"
 
@@ -111,6 +115,26 @@ def load_config(logger: Logger) -> configparser.ConfigParser:
         )
     config.read(CONFIG_PATH)
     return config
+
+
+def migrate_legacy_config(logger: Logger) -> None:
+    """Move ~/.config/nestcal.ini to its new home, once. OSError if it can't be moved, with
+    the old file left where it was: starting without the user's calendars would look like losing them."""
+    legacy = LEGACY_CONFIG_PATH
+    if not (legacy.exists() or legacy.is_symlink()):
+        return
+    if CONFIG_PATH.exists() or CONFIG_PATH.is_symlink():
+        print(f"nestcal: warning: ignoring the old config {legacy}: {CONFIG_PATH} exists and is the "
+              f"one in use. Delete the old file once you have what you need from it.", file=sys.stderr)
+        return
+    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    if legacy.is_symlink():
+        # People keep the file in a dotfiles repo: link to the same file, not to a possibly relative path.
+        os.symlink(legacy.resolve(), CONFIG_PATH)
+        legacy.unlink()
+    else:
+        shutil.move(legacy, CONFIG_PATH)
+    logger.log(f"moved the config from {legacy} to {CONFIG_PATH}")
 
 
 def normalise_ics_url(url: str) -> str:

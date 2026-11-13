@@ -2,7 +2,7 @@
 """
 nestcal_tray - a system-tray meeting reminder for ICS calendar feeds.
 
-Polls the configured ICS feeds (see nestcal_core / ~/.config/nestcal.ini) and,
+Polls the configured ICS feeds (see nestcal_core / ~/.config/nestcal/config.ini) and,
 a configurable lead time before each meeting starts, pops a bespoke window that
 stays on top and does NOT auto-dismiss (unlike a system notification). The
 window shows the title, the start-end time range, and the meeting link
@@ -29,7 +29,7 @@ import nestcal_core
 from nestcal_calendar_dialog import SetupDialog
 from nestcal_config_watch import ConfigWatcher
 from nestcal_core import (
-    Logger, load_config, read_config, get_feeds, parse_settings, Settings, collect_upcoming,
+    Logger, load_config, migrate_legacy_config, read_config, get_feeds, parse_settings, Settings, collect_upcoming,
     is_due_or_running, prune_seen, format_time_range,
     format_countdown, Occurrence,
 )
@@ -512,11 +512,17 @@ class TrayApp:
 
 def main() -> None:
     logger = Logger("--debug" in sys.argv)
+    try:
+        migrate_legacy_config(logger)
+    except OSError as e:
+        print(f"nestcal: can't move your config from {nestcal_core.LEGACY_CONFIG_PATH} to "
+              f"{nestcal_core.CONFIG_PATH}: {e}. Move it there by hand and start again.", file=sys.stderr)
+        sys.exit(1)
     config = load_config(logger)
     try:
         parse_settings(config)
     except ValueError as e:
-        print(f"nestcal: can't start: {e} (in ~/.config/nestcal.ini)", file=sys.stderr)
+        print(f"nestcal: can't start: {e} (in ~/.config/nestcal/config.ini)", file=sys.stderr)
         sys.exit(1)
 
     app = QApplication(sys.argv)
@@ -533,7 +539,7 @@ def main() -> None:
             feeds = get_feeds(config, logger)
     if not feeds:
         print(f"nestcal: no feeds configured; add calendars under [calendars] "
-              f"in ~/.config/nestcal.ini", file=sys.stderr)
+              f"in ~/.config/nestcal/config.ini", file=sys.stderr)
         sys.exit(1)
 
     TrayApp(app, config, logger)

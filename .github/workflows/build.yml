@@ -149,7 +149,7 @@ jobs:
           $process = Start-Process -FilePath dist\nestcal\Nestcal.exe -Wait -PassThru
           Write-Host "exit code: $($process.ExitCode)"
           if ($process.ExitCode -ne 1) { exit 1 }
-          if (-not (Test-Path (Join-Path $fakeHome.FullName ".config\nestcal.ini"))) { exit 1 }
+          if (-not (Test-Path (Join-Path $fakeHome.FullName ".config\nestcal\config.ini"))) { exit 1 }
 
       # ditto/tar keep the permissions and symlinks that upload-artifact's zip drops.
       - name: Package (macOS)
@@ -251,7 +251,9 @@ jobs:
 
           \`SHA256SUMS\` has the checksum of each file.
 
-          Create \`~/.config/nestcal.ini\` before the first launch; see the README.
+          On first launch nestcal asks for a calendar link and saves it to \`~/.config/nestcal/config.ini\`; see the README.
+
+          **Upgrading:** an existing \`~/.config/nestcal.ini\` is moved to \`~/.config/nestcal/config.ini\` on first launch.
 
           The apps are unsigned. On macOS, run \`xattr -cr Nestcal.app\` once (or right-click and choose Open);
           on Windows, SmartScreen will warn on first run.

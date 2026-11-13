@@ -20,7 +20,7 @@ https://support.google.com/calendar/answer/37648?hl=en#zippy=%2Cget-your-calenda
 (use the "Secret address in iCal format"; it's a secret, so keep it private).
 
 Run nestcal. With no calendars configured it asks for a name (eg "work") and the .ics link, and
-saves them to `~/.config/nestcal.ini`. After that it lives in your system tray, and everything
+saves them to `~/.config/nestcal/config.ini`. After that it lives in your system tray, and everything
 else can be done from its window: there's no need to edit a config file by hand (though you can).
 
 Using nestcal
@@ -71,7 +71,7 @@ Changes are only written when you press **Save** (**Revert** goes back to what's
 The config file
 ---
 
-Everything above is stored in `~/.config/nestcal.ini` (mode 600, because the links are secrets). You're welcome to edit it by hand instead:
+Everything above is stored in `~/.config/nestcal/config.ini` (mode 600, because the links are secrets). You're welcome to edit it by hand instead:
 
 ```
 # nestcal config
@@ -103,12 +103,17 @@ home = https://calendar.google.com/calendar/ical/...
 
 nestcal watches the file: save a change in your editor and it's applied within a second, and the window follows. Saving from the window keeps your comments and anything it doesn't touch exactly as it was. If you save a file nestcal can't make sense of (a calendar name used twice, a setting that isn't a number), it carries on with the last good settings and says so in a red banner at the top of the window until you fix it.
 
+Earlier releases kept this file at `~/.config/nestcal.ini`. On first launch nestcal moves it to
+its new place (a symlink stays a symlink to the same file), and refuses to start, saying why, if it
+can't. If a file already exists at the new place, that one is used, and the old one is reported at
+each start and left alone until you delete it.
+
 Update check
 ---
 
 Release builds ask GitHub for the latest release when they start, and then once a day. If there's a newer one, a link to the releases page appears at the top of the Events tab, and a dialog offers to open it. Since someone who dismisses that dialog may just be busy, it comes back after 2 days, then again after 4 more, and then leaves you alone about that release (the link stays).
 A still-newer release starts the schedule again. What it remembers for this is kept in
-`~/.config/nestcal.state.json`, which is safe to delete.
+`~/.config/nestcal/state.json`, which is safe to delete.
 
 Untick **Check for new versions** in Preferences (or set `check_for_updates = false`) to stop all of it. Source and `./build.sh` builds are unstamped ("dev") and never check. A failed check is silent; run with `--debug` to see why.
 
@@ -155,7 +160,7 @@ The app lives in the menu bar only: no Dock icon. Click its icon and choose **Op
 Before the first launch:
 
 1. Launch the app: with no calendars configured it asks for a name and .ics link and writes
-   `~/.config/nestcal.ini` (mode 600) for you.
+   `~/.config/nestcal/config.ini` (mode 600) for you.
 2. If you downloaded the app from CI rather than building it, macOS will refuse
    to open it because it isn't notarized. Run `xattr -cr Nestcal.app` once, or
    right-click the app and choose Open.
