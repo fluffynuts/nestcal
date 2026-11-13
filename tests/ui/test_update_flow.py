@@ -129,3 +129,16 @@ def test_a_damaged_state_file_does_not_stop_the_update_prompt(start_app, monkeyp
     app.tray_app.on_update_available("v0.9.0")
 
     assert shown == ["v0.9.0"]
+
+
+def test_remembering_an_update_prompt_does_not_make_the_app_reread_its_config(qtbot, start_app, monkeypatch):
+    """The state file sits next to the config; writing it used to wake the config watcher."""
+    reread = []
+    monkeypatch.setattr(nestcal_tray.TrayApp, "on_config_changed", lambda self: reread.append(True))
+    app, shown = start_with_clock(start_app, monkeypatch)
+
+    with qtbot.waitSignal(app.tray_app.config_watcher._settle.timeout, timeout=10_000):
+        app.tray_app.on_update_available("v0.9.0")
+
+    assert nestcal_update.STATE_PATH.exists()
+    assert reread == []
